@@ -12,7 +12,7 @@ RAW_SOCIAL_POSTS_SCHEMA = StructType(
         StructField("text", StringType(), True),
         StructField("source", StringType(), True),
         StructField("language", StringType(), True),
-        StructField("created_at", StringType(), True),+
+        StructField("created_at", StringType(), True),
         StructField(
             "metadata",
             StructType(
