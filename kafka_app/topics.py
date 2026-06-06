@@ -1,7 +1,0 @@
-"""Kafka topic names used across the platform."""
-
-from config.settings import KAFKA_PROCESSED_TOPIC, KAFKA_RAW_TOPIC
-
-
-RAW_SOCIAL_POSTS_TOPIC = KAFKA_RAW_TOPIC
-PROCESSED_SENTIMENTS_TOPIC = KAFKA_PROCESSED_TOPIC

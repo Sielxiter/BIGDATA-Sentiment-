@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date, datetime
+import time
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from elasticsearch import Elasticsearch, helpers
@@ -50,41 +52,54 @@ def create_index_if_not_exists(client: Elasticsearch | None = None) -> bool:
     es_client = client or get_elasticsearch_client()
     index_name = settings.elasticsearch_index
 
-    try:
-        try:
-            if es_client.indices.exists(index=index_name):
-                print(f"[elastic_client] Index already exists: {index_name}")
-                return True
-        except ApiError as exc:
-            # Some WSL/forwarded-connection setups return a generic 400 for the
-            # HEAD existence check even though the cluster itself is reachable.
-            # In that case, fall through to a create attempt and let the create
-            # call provide the definitive answer.
-            print(
-                f"[elastic_client] Index existence check failed for {index_name}: "
-                f"{_format_es_error(exc)}"
-            )
+    max_attempts = 5
+    retry_delay_seconds = 2
 
+    for attempt in range(1, max_attempts + 1):
         try:
-            es_client.indices.create(index=index_name, **get_sentiment_results_index_body())
-            print(f"[elastic_client] Created index: {index_name}")
-            return True
-        except ApiError as exc:
-            info = getattr(exc, "info", {}) or {}
-            error_type = None
-            if isinstance(info, dict):
-                error_type = (info.get("error") or {}).get("type")
-            if error_type == "resource_already_exists_exception":
-                print(f"[elastic_client] Index already exists: {index_name}")
+            try:
+                if es_client.indices.exists(index=index_name):
+                    print(f"[elastic_client] Index already exists: {index_name}")
+                    return True
+            except ApiError as exc:
+                # Some WSL/forwarded-connection setups return a generic 400 for the
+                # HEAD existence check even though the cluster itself is reachable.
+                # In that case, fall through to a create attempt and let the create
+                # call provide the definitive answer.
+                print(
+                    f"[elastic_client] Index existence check failed for {index_name}: "
+                    f"{_format_es_error(exc)}"
+                )
+
+            try:
+                es_client.indices.create(index=index_name, **get_sentiment_results_index_body())
+                print(f"[elastic_client] Created index: {index_name}")
                 return True
-            print(
-                f"[elastic_client] Failed to create index {index_name}: "
-                f"{_format_es_error(exc)}"
-            )
+            except ApiError as exc:
+                info = getattr(exc, "info", {}) or {}
+                error_type = None
+                if isinstance(info, dict):
+                    error_type = (info.get("error") or {}).get("type")
+                if error_type == "resource_already_exists_exception":
+                    print(f"[elastic_client] Index already exists: {index_name}")
+                    return True
+                print(
+                    f"[elastic_client] Failed to create index {index_name}: "
+                    f"{_format_es_error(exc)}"
+                )
+                return False
+        except Exception as exc:
+            if attempt < max_attempts:
+                print(
+                    f"[elastic_client] Elasticsearch not ready yet "
+                    f"(attempt {attempt}/{max_attempts}): {exc}"
+                )
+                time.sleep(retry_delay_seconds)
+                continue
+            print(f"[elastic_client] Failed to create index {index_name}: {exc}")
             return False
-    except Exception as exc:
-        print(f"[elastic_client] Failed to create index {index_name}: {exc}")
-        return False
+
+    return False
 
 
 def _json_safe_value(value: Any) -> Any:
@@ -100,6 +115,30 @@ def _json_safe_value(value: Any) -> Any:
         return [_json_safe_value(item) for item in value]
 
     return value
+
+
+def _normalize_epoch_seconds_to_iso(value: Any) -> Any:
+    """Convert numeric epoch-seconds values to strict ISO timestamps when possible."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    try:
+        decimal_value = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError, TypeError):
+        return value
+
+    if decimal_value <= 0:
+        return value
+
+    try:
+        seconds = float(decimal_value)
+        return datetime.utcfromtimestamp(seconds).isoformat() + "Z"
+    except Exception:
+        return value
 
 
 def _normalize_document(document: dict) -> dict | None:
@@ -118,34 +157,60 @@ def _normalize_document(document: dict) -> dict | None:
     if not isinstance(metadata, dict):
         metadata = {}
 
-    # Spark currently carries a few convenience columns at the top level.
-    # Keep the Elasticsearch source stable by reshaping them back into metadata.
     metadata = {
-        "author": metadata.get("author"),
-        "url": metadata.get("url"),
+        "author": metadata.get("author", document.get("author")),
+        "url": metadata.get("url", document.get("post_url")),
         "likes": metadata.get("likes", document.get("likes")),
+        "score": metadata.get("score"),
         "comments_count": metadata.get("comments_count"),
+        "comments_count_estimated": metadata.get("comments_count_estimated"),
         "video_id": metadata.get("video_id", document.get("video_id")),
         "video_title": metadata.get("video_title", document.get("video_title")),
         "youtube_type": metadata.get("youtube_type"),
         "keyword": metadata.get("keyword", document.get("keyword")),
-        "subreddit": metadata.get("subreddit"),
-        "reddit_type": metadata.get("reddit_type"),
+        "subreddit": metadata.get("subreddit", document.get("subreddit")),
+        "post_id": metadata.get("post_id", document.get("post_id")),
+        "post_title": metadata.get("post_title", document.get("post_title")),
+        "post_url": metadata.get("post_url", document.get("post_url")),
+        "comment_id": metadata.get("comment_id", document.get("comment_id")),
+        "scraper": metadata.get("scraper"),
+        "scraper_requested_engine": metadata.get("scraper_requested_engine"),
+        "sort_mode": metadata.get("sort_mode"),
+        "time_filter": metadata.get("time_filter"),
+        "search_url": metadata.get("search_url"),
+        "post_score": metadata.get("post_score"),
+        "post_created_at": _normalize_epoch_seconds_to_iso(metadata.get("post_created_at")),
+        "comment_score": metadata.get("comment_score"),
+        "permalink": metadata.get("permalink"),
+        "parent_id": metadata.get("parent_id"),
+        "session_id": metadata.get("session_id"),
     }
 
     normalized_document = {
         "id": document_id,
         "event": document.get("event"),
+        "event_name": document.get("event_name"),
         "source": document.get("source"),
         "original_text": document.get("original_text"),
         "cleaned_text": document.get("cleaned_text"),
+        "keyword": document.get("keyword"),
+        "subreddit": document.get("subreddit"),
+        "post_id": document.get("post_id"),
+        "post_title": document.get("post_title"),
+        "post_url": document.get("post_url"),
+        "comment_id": document.get("comment_id"),
+        "author": document.get("author"),
         "language": document.get("language"),
         "sentiment": document.get("sentiment"),
         "confidence": document.get("confidence"),
         "model_name": document.get("model_name"),
         "model_version": document.get("model_version"),
         "created_at": document.get("created_at"),
+        "collected_at": document.get("collected_at"),
         "processed_at": document.get("processed_at"),
+        "video_id": document.get("video_id"),
+        "video_title": document.get("video_title"),
+        "likes": document.get("likes"),
         "metadata": metadata,
     }
 
@@ -166,6 +231,7 @@ def index_document(document: dict) -> bool:
             id=normalized["id"],
             document=normalized,
         )
+        get_elasticsearch_client().indices.refresh(index=settings.elasticsearch_index)
         print(f"[elastic_client] Indexed document id={normalized['id']}")
         return True
     except Exception as exc:
@@ -210,6 +276,7 @@ def bulk_index_documents(documents: list[dict]) -> int:
 
         if errors:
             print(f"[elastic_client] Bulk indexing completed with errors: {errors[:3]}")
+        get_elasticsearch_client().indices.refresh(index=settings.elasticsearch_index)
         print(f"[elastic_client] Bulk indexed {success_count} documents")
         return int(success_count)
     except Exception as exc:

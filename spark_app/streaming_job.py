@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.settings import settings  # noqa: E402
+from cloud.kafka_client import ensure_kafka_topics  # noqa: E402
 from spark_app.transformations import (  # noqa: E402
     add_sentiment_predictions,
     clean_posts,
@@ -61,6 +62,11 @@ def main() -> None:
     spark = build_spark_session()
     spark.sparkContext.setLogLevel("WARN")
 
+    ensure_kafka_topics(
+        [settings.kafka_raw_topic, settings.kafka_processed_topic],
+        bootstrap_servers=settings.kafka_bootstrap_servers,
+    )
+
     if use_elasticsearch:
         create_index_if_not_exists()
 
@@ -70,6 +76,7 @@ def main() -> None:
         .option("subscribe", settings.kafka_raw_topic)
         .option("startingOffsets", "latest")
         .option("failOnDataLoss", "false")
+        .option("maxOffsetsPerTrigger", settings.spark_max_offsets_per_trigger)
         .load()
     )
 

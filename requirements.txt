@@ -1,13 +1,11 @@
 python-dotenv>=1.0.1
 confluent-kafka>=2.5.0
-google-api-python-client>=2.149.0
 pyspark>=3.5.1
 elasticsearch>=8.14.0,<9
 streamlit>=1.37.0
 pandas>=2.2.2
 plotly>=5.23.0
 requests>=2.32.3
-praw>=7.8.1
 transformers>=4.44.2
 torch>=2.4.0
 sentencepiece>=0.2.0

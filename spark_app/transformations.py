@@ -62,7 +62,12 @@ def validate_posts(df: DataFrame) -> DataFrame:
     for field in REQUIRED_RAW_POST_FIELDS:
         condition = condition & F.col(field).isNotNull() & (F.length(F.trim(F.col(field))) > 0)
 
-    return df.filter(condition)
+    event_condition = (
+        (F.col("event_name").isNotNull() & (F.length(F.trim(F.col("event_name"))) > 0))
+        | (F.col("event").isNotNull() & (F.length(F.trim(F.col("event"))) > 0))
+    )
+
+    return df.filter(condition & event_condition)
 
 
 def clean_posts(df: DataFrame) -> DataFrame:
@@ -73,24 +78,41 @@ def clean_posts(df: DataFrame) -> DataFrame:
     return (
         df.withColumn("original_text", F.col("text"))
         .withColumn("cleaned_text", clean_text_udf(F.col("text")))
+        .withColumn("event", F.coalesce(F.col("event_name"), F.col("event")))
+        .withColumn("event_name", F.coalesce(F.col("event_name"), F.col("event")))
         .withColumn("processed_at", F.current_timestamp())
+        .withColumn("author", F.coalesce(F.col("author"), F.col("metadata.author")))
+        .withColumn("keyword", F.coalesce(F.col("keyword"), F.col("metadata.keyword")))
+        .withColumn("subreddit", F.coalesce(F.col("subreddit"), F.col("metadata.subreddit")))
+        .withColumn("post_id", F.coalesce(F.col("post_id"), F.col("metadata.post_id")))
+        .withColumn("post_title", F.coalesce(F.col("post_title"), F.col("metadata.post_title")))
+        .withColumn("post_url", F.coalesce(F.col("post_url"), F.col("metadata.post_url"), F.col("metadata.url")))
+        .withColumn("comment_id", F.coalesce(F.col("comment_id"), F.col("metadata.comment_id")))
+        .withColumn("collected_at", F.coalesce(F.col("collected_at"), F.col("created_at")))
         .withColumn("video_id", F.col("metadata.video_id"))
         .withColumn("video_title", F.col("metadata.video_title"))
         .withColumn("likes", F.col("metadata.likes"))
-        .withColumn("keyword", F.col("metadata.keyword"))
         .select(
             "id",
             "event",
+            "event_name",
             "source",
             "original_text",
             "cleaned_text",
+            "keyword",
+            "subreddit",
+            "post_id",
+            "post_title",
+            "post_url",
+            "comment_id",
+            "author",
             "language",
             "created_at",
+            "collected_at",
             "processed_at",
             "video_id",
             "video_title",
             "likes",
-            "keyword",
             "metadata",
         )
     )
@@ -110,20 +132,28 @@ def add_sentiment_predictions(df: DataFrame) -> DataFrame:
         .select(
             "id",
             "event",
+            "event_name",
             "source",
             "original_text",
             "cleaned_text",
+            "keyword",
+            "subreddit",
+            "post_id",
+            "post_title",
+            "post_url",
+            "comment_id",
+            "author",
             "sentiment",
             "confidence",
             "model_name",
             "model_version",
             "language",
             "created_at",
+            "collected_at",
             "processed_at",
             "video_id",
             "video_title",
             "likes",
-            "keyword",
             "metadata",
         )
     )

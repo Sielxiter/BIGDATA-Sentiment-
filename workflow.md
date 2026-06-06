@@ -1,88 +1,89 @@
-# Main Workflow
+# Production Workflow
 
-This project now uses one main workflow:
+Target flow:
 
-`AWS Lambda -> S3 -> Kafka -> Spark -> BERT -> Elasticsearch -> Streamlit`
+`AWS Lambda -> Kafka on EC2 (+ optional S3 backup) -> Spark on EC2 -> Fine-tuned BERT on EC2 -> Elasticsearch on EC2 -> Streamlit on EC2`
 
-## 1. One-time Setup
+## 1. Collector
 
-### Local
+Deploy `cloud/lambda_reddit_to_kafka.py` as the Lambda handler.
 
-1. Start infrastructure:
+Environment variables:
 
-```bash
-docker compose up -d
-```
-
-2. Create Kafka topic (first run only):
-
-```powershell
-docker exec -it sentiment-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic raw_social_posts --partitions 1 --replication-factor 1
-```
-rm -rf checkpoints/spark
-
-3. Install Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-4. Copy env file and fill values:
-
-```bash
-cp .env.example .env
-```
-
-Required in `.env`:
-- `YOUTUBE_API_KEY`
+- `COLLECTOR_SOURCE=reddit`
+- `COLLECTOR_MODE=lambda`
+- `COLLECTOR_LAMBDA_FUNCTION_NAME=reddit-collector-to-kafka`
+- `COLLECTOR_LAMBDA_REGION=eu-north-1`
+- `KAFKA_BOOTSTRAP_SERVERS`
+- `KAFKA_RAW_TOPIC`
 - `S3_BUCKET_NAME`
-- `AWS_REGION`
+- `S3_PREFIX`
+- `ENABLE_S3_BACKUP`
+- `REDDIT_SCRAPER_ENGINE`
+- `REDDIT_REQUEST_DELAY_SECONDS`
+- `REDDIT_TIMEOUT_SECONDS`
+- `REDDIT_HEADLESS`
 
-### AWS
+The collector scrapes public Reddit posts and comments with respectful delays.
 
-1. Create an S3 bucket for raw comments.
-2. Create IAM role for Lambda with:
-- `AWSLambdaBasicExecutionRole`
-- `s3:PutObject` on your bucket path
-3. Deploy `cloud/lambda_youtube_to_s3_example.py` as your Lambda code.
-4. Set Lambda environment variables:
-- `YOUTUBE_API_KEY`
-- `S3_BUCKET_NAME`
-- `S3_PREFIX` (example: `raw/youtube`)
-- `ENABLE_S3_BACKUP=true`
-- `AWS_REGION`
-5. Add an EventBridge schedule to run Lambda periodically (for example every 1 minute).
+## 2. Kafka on EC2
 
-## 2. Run Pipeline
+- Keep the raw topic name as `raw_social_posts`.
+- Make sure the broker is reachable from Lambda and from local testing.
+- If you use Docker on EC2, `docker-compose.yml` starts Kafka, Zookeeper, Kafka UI, and Elasticsearch together.
+- Set `KAFKA_ADVERTISED_HOST_NAME` to the EC2 host name or public IP when Kafka must accept external clients.
 
-Open separate terminals.
+## 3. Spark on EC2
 
-1. Start S3 -> Kafka bridge:
-
-```bash
-python cloud/s3_to_kafka_bridge.py
-```
-
-2. Start Spark streaming:
+Run:
 
 ```bash
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1 spark_app/streaming_job.py
 ```
 
-3. Start dashboard:
+Spark accepts Reddit messages where `source="reddit"`.
+
+## 4. Fine-tuned BERT on EC2
+
+- Use `nlp/trained_bert_model.py` and `nlp/sentiment_service.py`.
+- Verify `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_VERSION`, and `MODEL_DEVICE`.
+
+## 5. Elasticsearch on EC2
+
+- Deploy Elasticsearch on EC2.
+- Verify `ELASTICSEARCH_URL` and `ELASTICSEARCH_INDEX`.
+
+## 6. Streamlit on EC2
+
+Run:
 
 ```bash
 streamlit run dashboard/app.py
 ```
 
-## 3. Verify
+Set `COLLECTOR_MODE=local` for local scraping during testing, or `COLLECTOR_MODE=lambda` to invoke AWS Lambda.
 
-1. Kafka UI: [http://localhost:8080](http://localhost:8080)
-2. Elasticsearch: [http://localhost:9200/sentiment_results/_search?pretty](http://localhost:9200/sentiment_results/_search?pretty)
-3. Streamlit: [http://localhost:8501](http://localhost:8501)
+## Local Reddit scraping test
 
-## 4. Notes
+Run:
 
-- If Spark fails with `UnknownTopicOrPartitionException`, create `raw_social_posts` topic manually.
-- If the bridge sends nothing, check S3 bucket/prefix and Lambda logs.
-- The bridge keeps state in `cloud/.s3_bridge_state.json` to avoid re-sending already processed S3 files.
+```bash
+python scripts/test_reddit_scraper_local.py --event "World Cup" --keywords "morocco,football" --subreddits "soccer,worldcup" --max-posts 20 --max-comments 50 --output-jsonl data/reddit_test.jsonl
+```
+
+To send the same data to Kafka, add:
+
+```bash
+--send-to-kafka true
+```
+
+Expected output:
+
+- posts scanned
+- comments collected
+- 3 sample documents
+- optional JSONL file
+
+## Lambda limitation
+
+Selenium and Playwright are intentionally not required in the default build because they add browser runtime overhead in Lambda. The current collector uses `requests` and Reddit's public JSON endpoints, which keeps the code path lighter and easier to deploy. If Reddit changes its structure, a browser-based fallback can be added later.

@@ -1,7 +1,7 @@
 """AWS Lambda helpers for the Streamlit dashboard.
 
-This module intentionally does not manage credentials. boto3 will use whatever
-the user configured locally via `aws configure` (shared credentials file).
+This module intentionally does not manage credentials. boto3 will use the
+instance profile on EC2 or any configured AWS credentials available at runtime.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from botocore.exceptions import (
     PartialCredentialsError,
 )
 
+from config.settings import settings
 
 class LambdaInvokeError(RuntimeError):
     """Raised when Lambda invocation fails in a user-actionable way."""
@@ -25,21 +26,28 @@ class LambdaInvokeError(RuntimeError):
         self.details = details or {}
 
 
-def invoke_youtube_collector_lambda(
+def invoke_reddit_collector_lambda(
     *,
     event_name: str,
     keywords: str,
-    max_videos: int,
-    max_comments: int,
-    function_name: str = "youtube-collector-to-s3",
-    region_name: str = "eu-north-1",
+    subreddits: str = "",
+    max_posts: int = 20,
+    max_comments_per_post: int = 50,
+    sort_mode: str = "relevance",
+    time_filter: str = "",
+    engine: str = "requests",
+    function_name: str = settings.collector_lambda_function_name,
+    region_name: str = settings.collector_lambda_region,
 ) -> dict[str, Any]:
     payload = {
-        "mode": "limited",
         "event_name": event_name,
         "keywords": keywords,
-        "max_videos": int(max_videos),
-        "max_comments": int(max_comments),
+        "subreddits": subreddits,
+        "max_posts": int(max_posts),
+        "max_comments_per_post": int(max_comments_per_post),
+        "sort_mode": sort_mode,
+        "time_filter": time_filter,
+        "engine": engine,
     }
 
     try:
@@ -50,7 +58,9 @@ def invoke_youtube_collector_lambda(
             Payload=json.dumps(payload).encode("utf-8"),
         )
     except (NoCredentialsError, PartialCredentialsError) as exc:
-        raise LambdaInvokeError("AWS credentials not found. Run aws configure locally.") from exc
+        raise LambdaInvokeError(
+            "AWS credentials not found. Attach an IAM role or run aws configure."
+        ) from exc
     except ClientError as exc:
         code = (exc.response or {}).get("Error", {}).get("Code", "") if hasattr(exc, "response") else ""
         if code in {"AccessDeniedException", "UnauthorizedOperation"}:
@@ -94,3 +104,9 @@ def invoke_youtube_collector_lambda(
         )
 
     return {"request_payload": payload, "raw_response": response, "decoded": decoded}
+
+
+def invoke_youtube_collector_lambda(**kwargs: Any) -> dict[str, Any]:
+    """Compatibility alias for older code paths."""
+
+    return invoke_reddit_collector_lambda(**kwargs)
