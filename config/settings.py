@@ -24,6 +24,8 @@ AWS_REGION = os.getenv("AWS_REGION", "eu-north-1")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "")
 S3_PREFIX = os.getenv("S3_PREFIX", "raw/reddit")
 ENABLE_S3_BACKUP = os.getenv("ENABLE_S3_BACKUP", "true").strip().lower() == "true"
+COLLECTOR_CONFIG_BUCKET_NAME = os.getenv("COLLECTOR_CONFIG_BUCKET_NAME", S3_BUCKET_NAME)
+COLLECTOR_CONFIG_S3_KEY = os.getenv("COLLECTOR_CONFIG_S3_KEY", "config/reddit_collector_runtime.json")
 
 COLLECTOR_SOURCE = os.getenv("COLLECTOR_SOURCE", "reddit")
 COLLECTOR_MODE = os.getenv("COLLECTOR_MODE", "local").strip().lower()
@@ -72,6 +74,8 @@ class Settings:
     s3_bucket_name: str = S3_BUCKET_NAME
     s3_prefix: str = S3_PREFIX
     enable_s3_backup: bool = ENABLE_S3_BACKUP
+    collector_config_bucket_name: str = COLLECTOR_CONFIG_BUCKET_NAME
+    collector_config_s3_key: str = COLLECTOR_CONFIG_S3_KEY
     collector_source: str = COLLECTOR_SOURCE
     collector_mode: str = COLLECTOR_MODE
     collector_lambda_function_name: str = COLLECTOR_LAMBDA_FUNCTION_NAME

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from cloud.collector_config import load_collector_runtime_config
 from cloud.reddit_scraper_collector import run_reddit_collection
 from config.settings import settings
 
@@ -21,14 +22,16 @@ def lambda_handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]
     """Collect Reddit comments, publish them to Kafka, and optionally upload JSONL to S3."""
 
     event = event or {}
-    event_name = str(event.get("event_name") or settings.default_event_name).strip()
-    keywords = _as_csv_or_list(event.get("keywords") or settings.default_reddit_keywords)
-    subreddits = _as_csv_or_list(event.get("subreddits") or settings.default_reddit_subreddits)
-    max_posts = int(event.get("max_posts", settings.reddit_max_posts))
-    max_comments_per_post = int(event.get("max_comments_per_post", settings.reddit_max_comments_per_post))
-    sort_mode = str(event.get("sort_mode") or settings.default_reddit_sort_mode).strip().lower()
-    time_filter = str(event.get("time_filter") or settings.default_reddit_time_filter).strip() or None
-    engine = str(event.get("engine") or settings.reddit_scraper_engine).strip().lower()
+    stored_config, config_error = load_collector_runtime_config()
+    runtime_config = {**stored_config, **event}
+    event_name = str(runtime_config.get("event_name") or settings.default_event_name).strip()
+    keywords = _as_csv_or_list(runtime_config.get("keywords") or settings.default_reddit_keywords)
+    subreddits = _as_csv_or_list(runtime_config.get("subreddits") or settings.default_reddit_subreddits)
+    max_posts = int(runtime_config.get("max_posts", settings.reddit_max_posts))
+    max_comments_per_post = int(runtime_config.get("max_comments_per_post", settings.reddit_max_comments_per_post))
+    sort_mode = str(runtime_config.get("sort_mode") or settings.default_reddit_sort_mode).strip().lower()
+    time_filter = str(runtime_config.get("time_filter") or settings.default_reddit_time_filter).strip() or None
+    engine = str(runtime_config.get("engine") or settings.reddit_scraper_engine).strip().lower()
 
     try:
         result = run_reddit_collection(
@@ -59,8 +62,12 @@ def lambda_handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]
         }
     else:
         error_list = result.get("errors", [])
+        warnings = []
+        if config_error:
+            warnings.append(config_error)
         response = {
             "status": result.get("status", "error"),
+            "config_loaded_from_s3": bool(stored_config),
             "session_id": result.get("session_id"),
             "posts_scanned": result.get("posts_scanned", 0),
             "comments_collected": result.get("comments_collected", 0),
@@ -69,6 +76,8 @@ def lambda_handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]
             "s3_backup_key": result.get("s3_backup_key"),
             "errors": error_list,
         }
+        if warnings:
+            response["warnings"] = warnings
         if error_list:
             response["message"] = error_list[0]
         if result.get("backup_error"):

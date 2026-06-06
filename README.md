@@ -16,10 +16,12 @@ The project no longer depends on the YouTube API. The collector now scrapes publ
 - `cloud/lambda_reddit_to_kafka.py`
 - `cloud/kafka_client.py`
 - `cloud/s3_backup.py`
+- `cloud/collector_config.py`
 - `spark_app/streaming_job.py`
 - `nlp/trained_bert_model.py`
 - `storage/elastic_client.py`
 - `dashboard/app.py`
+- `deploy/nginx.conf`
 - `docker-compose.yml`
 
 ## Docker stack
@@ -82,6 +84,8 @@ The Lambda expects the same payload fields used by the dashboard:
 - `sort_mode`
 - `time_filter`
 - `engine`
+
+The dashboard can save the active Lambda collector settings to S3 so scheduled EventBridge runs can reuse the latest event/keyword/subreddit limits.
 
 ## Limitations
 

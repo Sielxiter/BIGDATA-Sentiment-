@@ -48,6 +48,9 @@ Only the files below are part of the current workflow.
 - `cloud/s3_backup.py`
   - Helper for writing collected records to S3 as JSONL.
 
+- `cloud/collector_config.py`
+  - Helper for saving and loading the active collector configuration from S3.
+
 - `cloud/__init__.py`
   - Marks `cloud/` as a Python package.
 
@@ -120,6 +123,11 @@ Only the files below are part of the current workflow.
 - `storage/__init__.py`
   - Package marker.
 
+### `deploy/`
+
+- `deploy/nginx.conf`
+  - Reverse proxy configuration for putting Streamlit behind nginx on EC2.
+
 ### `config/`
 
 - `config/settings.py`
@@ -172,6 +180,7 @@ When helping with AWS setup, assume this target architecture:
    - Runs the Reddit collector in Lambda mode.
    - Publishes normalized comments directly to Kafka.
    - Optionally writes a backup JSONL file to S3.
+   - Reads the latest saved collector parameters from S3 when invoked without an explicit payload, which allows EventBridge scheduled runs to reuse the settings chosen in Streamlit.
 
 2. `Kafka on EC2`
    - Kafka broker runs on an EC2 instance or EC2-based cluster.
@@ -194,6 +203,7 @@ When helping with AWS setup, assume this target architecture:
 6. `Streamlit on EC2`
    - Serves the dashboard UI.
    - Can invoke Lambda or run the local collector directly depending on `COLLECTOR_MODE`.
+   - Can save the active Lambda collector settings to S3 so scheduled Lambda runs use the selected event, keywords, subreddits, max posts, and max comments per post.
 
 ## 6. Important Environment Variables
 
@@ -238,8 +248,11 @@ When configuring AWS and EC2, these are the most important values:
   - sort mode
   - time filter
   - scraper engine label
+- The dashboard now includes:
+  - a top-level event filter for the live Elasticsearch chart
+  - a Lambda settings save flow for event/keyword/subreddit/post-limit changes
 - If `COLLECTOR_MODE=local`, the dashboard runs the local Reddit collector directly.
-- If `COLLECTOR_MODE=lambda`, the dashboard invokes the AWS Lambda collector with `boto3`.
+- If `COLLECTOR_MODE=lambda`, the dashboard saves the chosen collector settings to S3 and can also trigger the Lambda collector with `boto3` for an immediate run.
 - The dashboard displays:
   - status
   - session id
@@ -275,8 +288,10 @@ If asked how to deploy this project on AWS, focus on:
 - IAM roles for Lambda and EC2 instances
 - Security groups and VPC routing
 - S3 backup bucket and `s3:PutObject` permissions
+- S3 collector-config bucket and `s3:GetObject` / `s3:PutObject` permissions for Streamlit and Lambda
 - Kafka broker endpoint configuration in `KAFKA_BOOTSTRAP_SERVERS`
 - Spark reading from Kafka topic `raw_social_posts`
+- Nginx reverse proxy in front of Streamlit for production deployment on EC2
 
 ## 10. Short One-Line Summary
 

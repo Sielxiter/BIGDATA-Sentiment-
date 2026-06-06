@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from cloud.reddit_scraper_collector import run_reddit_collection  # noqa: E402
+from cloud.collector_config import save_collector_runtime_config  # noqa: E402
 from config.settings import settings  # noqa: E402
 from dashboard.aws_lambda import LambdaInvokeError, invoke_reddit_collector_lambda  # noqa: E402
 
@@ -40,6 +41,7 @@ SENTIMENT_CHART_COLORS = [
     "#26A69A",
     "#EF5350",
 ]
+EVENT_FILTER_ALL = "All events"
 
 
 def apply_simple_style() -> None:
@@ -80,15 +82,52 @@ def get_elasticsearch_client() -> Elasticsearch:
     return Elasticsearch(settings.elasticsearch_url)
 
 
-def load_sentiment_counts(limit: int = 12) -> tuple[pd.DataFrame, int, str | None]:
+@st.cache_data(ttl=5, show_spinner=False)
+def load_available_events(limit: int = 20) -> tuple[list[str], str | None]:
+    try:
+        client = get_elasticsearch_client()
+        if not client.indices.exists(index=settings.elasticsearch_index):
+            return [EVENT_FILTER_ALL], "Elasticsearch index does not exist yet."
+
+        response = client.search(
+            index=settings.elasticsearch_index,
+            size=0,
+            aggs={
+                "event_names": {
+                    "terms": {
+                        "field": "event_name",
+                        "size": limit,
+                        "order": {"_count": "desc"},
+                    }
+                }
+            },
+        )
+        buckets = response.get("aggregations", {}).get("event_names", {}).get("buckets", [])
+        events = [str(bucket.get("key", "")).strip() for bucket in buckets if str(bucket.get("key", "")).strip()]
+        if not events:
+            events = [EVENT_FILTER_ALL]
+        else:
+            events = [EVENT_FILTER_ALL] + events
+        return events, None
+    except Exception as exc:
+        return [EVENT_FILTER_ALL], str(exc)
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def load_sentiment_counts(limit: int = 12, event_name: str | None = None) -> tuple[pd.DataFrame, int, str | None]:
     try:
         client = get_elasticsearch_client()
         if not client.indices.exists(index=settings.elasticsearch_index):
             return pd.DataFrame(columns=["label", "count"]), 0, "Elasticsearch index does not exist yet."
 
+        query: dict[str, Any] = {"match_all": {}}
+        if event_name and event_name != EVENT_FILTER_ALL:
+            query = {"term": {"event_name": event_name}}
+
         response = client.search(
             index=settings.elasticsearch_index,
             size=0,
+            query=query,
             aggs={
                 "sentiment_counts": {
                     "terms": {
@@ -172,6 +211,8 @@ def render_target_summary() -> None:
     if COLLECTOR_MODE == "lambda":
         st.write(f"Lambda: `{LAMBDA_FUNCTION_NAME}`")
         st.write(f"Region: `{LAMBDA_REGION}`")
+        if settings.collector_config_bucket_name:
+            st.write(f"Saved collector config: `s3://{settings.collector_config_bucket_name}/{settings.collector_config_s3_key}`")
     st.write(f"Kafka topic: `{KAFKA_TOPIC}`")
     if settings.s3_bucket_name:
         st.write(f"S3 bucket: `{settings.s3_bucket_name}`")
@@ -182,7 +223,7 @@ def render_target_summary() -> None:
 def render_flow_summary() -> None:
     st.markdown("### Flow")
     if COLLECTOR_MODE == "lambda":
-        flow = "Streamlit -> AWS Lambda -> Reddit public pages -> Kafka -> Spark -> Elasticsearch"
+        flow = "Streamlit -> S3 saved config -> EventBridge / Streamlit invoke -> AWS Lambda -> Reddit public pages -> Kafka -> Spark -> Elasticsearch"
     else:
         flow = "Streamlit -> local Reddit scraper -> Kafka -> Spark -> Elasticsearch"
     st.code(flow, language="text")
@@ -262,12 +303,14 @@ def render_last_response() -> None:
 
 
 def render_live_sentiment_panel() -> None:
-    counts_df, total_count, error = load_sentiment_counts()
+    selected_event = st.session_state.get("selected_event_filter", EVENT_FILTER_ALL)
+    counts_df, total_count, error = load_sentiment_counts(event_name=selected_event)
 
     st.markdown("### Real-Time Results")
     st.caption(
         "This graph refreshes from Elasticsearch, where Spark writes BERT predictions after consuming Kafka."
     )
+    st.write(f"Event filter: `{selected_event}`")
 
     metric_left, metric_right = st.columns(2)
     metric_left.metric("Processed comments", format_int(total_count))
@@ -346,6 +389,29 @@ def invoke_lambda_collection(
     return result
 
 
+def build_collector_runtime_config(
+    *,
+    event_name: str,
+    keywords: str,
+    subreddits: str,
+    max_posts: int,
+    max_comments_per_post: int,
+    sort_mode: str,
+    time_filter: str,
+    engine: str,
+) -> dict[str, Any]:
+    return {
+        "event_name": event_name,
+        "keywords": keywords,
+        "subreddits": subreddits,
+        "max_posts": int(max_posts),
+        "max_comments_per_post": int(max_comments_per_post),
+        "sort_mode": sort_mode,
+        "time_filter": time_filter,
+        "engine": engine,
+    }
+
+
 def main() -> None:
     st.set_page_config(page_title="Reddit Sentiment Dashboard", layout="wide", initial_sidebar_state="collapsed")
     apply_simple_style()
@@ -355,16 +421,46 @@ def main() -> None:
         auto_refresh = st.toggle("Auto refresh", value=True)
         refresh_seconds = st.number_input("Refresh every seconds", min_value=3, max_value=60, value=5, step=1)
         st.caption("Disable while typing if the page refreshes too often.")
+        st.markdown("### Deployment")
+        st.write("Use `COLLECTOR_MODE=lambda` for AWS-triggered scraping.")
+        st.write("Use the top event filter to narrow live Elasticsearch charts.")
 
     st.title("Reddit Sentiment Dashboard")
     st.caption("Collect public Reddit comments, publish them to Kafka, and watch Spark/BERT results update live.")
     st.markdown(f"<span class='collector-badge'>Collector mode: {COLLECTOR_MODE}</span>", unsafe_allow_html=True)
+
+    available_events, event_error = load_available_events()
+    if "selected_event_filter" not in st.session_state:
+        st.session_state["selected_event_filter"] = EVENT_FILTER_ALL
+
+    filter_left, filter_right = st.columns([0.62, 0.38])
+    with filter_left:
+        current_event = st.selectbox(
+            "Filter live chart by event",
+            available_events,
+            index=available_events.index(st.session_state["selected_event_filter"])
+            if st.session_state["selected_event_filter"] in available_events
+            else 0,
+            key="selected_event_filter",
+        )
+    with filter_right:
+        st.markdown("### Live Filter")
+        st.write(f"Current event: `{current_event}`")
+        if event_error:
+            st.caption(f"Filter source warning: {event_error}")
 
     left, right = st.columns([0.95, 1.05])
 
     with left:
         with st.container(border=True):
             st.markdown("### Collect Reddit Data")
+            if COLLECTOR_MODE == "lambda":
+                st.info(
+                    "Lambda mode saves the chosen event/keyword settings to S3 so your scheduled EventBridge runs use them. "
+                    "This button also runs Lambda immediately after saving."
+                )
+            else:
+                st.info("Local mode runs the collector directly from Streamlit.")
 
             with st.form("reddit_collector_form", clear_on_submit=False):
                 event_name = st.text_input("Event name", value=settings.default_event_name)
@@ -402,7 +498,8 @@ def main() -> None:
                     index=0 if settings.reddit_scraper_engine not in {"requests", "selenium"} else ["requests", "selenium"].index(settings.reddit_scraper_engine),
                 )
 
-                submitted = st.form_submit_button("Collect Reddit Comments", use_container_width=True)
+                submit_label = "Save settings & run Lambda now" if COLLECTOR_MODE == "lambda" else "Collect Reddit Comments"
+                submitted = st.form_submit_button(submit_label, use_container_width=True)
 
             if submitted:
                 if not event_name.strip():
@@ -410,43 +507,63 @@ def main() -> None:
                 elif not keywords_raw.strip():
                     st.error("Keywords are required.")
                 else:
-                    with st.spinner("Collecting Reddit comments..."):
+                    runtime_config = build_collector_runtime_config(
+                        event_name=event_name.strip(),
+                        keywords=keywords_raw.strip(),
+                        subreddits=subreddits_raw.strip(),
+                        max_posts=int(max_posts),
+                        max_comments_per_post=int(max_comments),
+                        sort_mode=sort_mode,
+                        time_filter=time_filter,
+                        engine=engine,
+                    )
+                    with st.spinner("Collecting Reddit comments..." if COLLECTOR_MODE != "lambda" else "Saving settings and triggering Lambda..."):
                         try:
                             if COLLECTOR_MODE == "lambda":
-                                result = invoke_lambda_collection(
-                                    event_name=event_name.strip(),
-                                    keywords=keywords_raw.strip(),
-                                    subreddits=subreddits_raw.strip(),
-                                    max_posts=int(max_posts),
-                                    max_comments_per_post=int(max_comments),
-                                    sort_mode=sort_mode,
-                                    time_filter=time_filter,
-                                    engine=engine,
+                                saved_key, save_error = save_collector_runtime_config(
+                                    runtime_config,
+                                    bucket=settings.collector_config_bucket_name,
+                                    key=settings.collector_config_s3_key,
+                                    region=settings.aws_region,
                                 )
-                                body = _extract_lambda_body(result)
-                                if body.get("status") == "ok":
-                                    render_success(result)
+                                if save_error:
+                                    st.error(f"Could not save Lambda collector settings: {save_error}")
                                 else:
-                                    message = body.get("message") or "Lambda returned an error."
-                                    st.error(str(message))
-                                    error_items = body.get("errors") or body.get("warnings") or []
-                                    if error_items:
-                                        with st.expander("Details"):
-                                            if isinstance(error_items, list):
-                                                for error in error_items:
-                                                    st.write(f"- {error}")
-                                            else:
-                                                st.json(error_items)
+                                    result = invoke_lambda_collection(
+                                        event_name=runtime_config["event_name"],
+                                        keywords=runtime_config["keywords"],
+                                        subreddits=runtime_config["subreddits"],
+                                        max_posts=runtime_config["max_posts"],
+                                        max_comments_per_post=runtime_config["max_comments_per_post"],
+                                        sort_mode=runtime_config["sort_mode"],
+                                        time_filter=runtime_config["time_filter"],
+                                        engine=runtime_config["engine"],
+                                    )
+                                    body = _extract_lambda_body(result)
+                                    if body.get("status") == "ok":
+                                        st.success(f"Saved collector settings to `{saved_key}`.")
+                                        render_success(result)
+                                    else:
+                                        message = body.get("message") or "Lambda returned an error."
+                                        st.error(str(message))
+                                        error_items = body.get("errors") or body.get("warnings") or []
+                                        if error_items:
+                                            with st.expander("Details"):
+                                                if isinstance(error_items, list):
+                                                    for error in error_items:
+                                                        st.write(f"- {error}")
+                                                else:
+                                                    st.json(error_items)
                             else:
                                 result = invoke_local_collection(
-                                    event_name=event_name.strip(),
-                                    keywords=keywords_raw.strip(),
-                                    subreddits=subreddits_raw.strip(),
-                                    max_posts=int(max_posts),
-                                    max_comments_per_post=int(max_comments),
-                                    sort_mode=sort_mode,
-                                    time_filter=time_filter,
-                                    engine=engine,
+                                    event_name=runtime_config["event_name"],
+                                    keywords=runtime_config["keywords"],
+                                    subreddits=runtime_config["subreddits"],
+                                    max_posts=runtime_config["max_posts"],
+                                    max_comments_per_post=runtime_config["max_comments_per_post"],
+                                    sort_mode=runtime_config["sort_mode"],
+                                    time_filter=runtime_config["time_filter"],
+                                    engine=runtime_config["engine"],
                                 )
                                 render_success(result)
                         except LambdaInvokeError as exc:
