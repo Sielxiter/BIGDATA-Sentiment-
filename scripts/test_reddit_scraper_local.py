@@ -1,4 +1,4 @@
-"""Local Reddit scraper test script.
+﻿"""Local YouTube API collector test script.
 
 This script is meant for workstation or EC2 validation before Lambda deployment.
 It uses the same collector helper as the dashboard and Lambda entrypoint.
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -21,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-from cloud.reddit_scraper_collector import run_reddit_collection  # noqa: E402
+from cloud.youtube_api_collector import run_youtube_collection  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 
@@ -39,16 +38,35 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Test the Reddit scraper locally.")
+    parser = argparse.ArgumentParser(description="Test the YouTube API collector locally.")
     parser.add_argument("--event", default=settings.default_event_name, help="Event name to associate with the scrape.")
-    parser.add_argument("--keywords", default=settings.default_reddit_keywords, help="Comma-separated keyword list.")
-    parser.add_argument("--subreddits", default=settings.default_reddit_subreddits, help="Comma-separated subreddit list.")
-    parser.add_argument("--max-posts", type=int, default=settings.reddit_max_posts, help="Maximum number of posts to scan.")
+    parser.add_argument(
+        "--search-query",
+        "--keywords",
+        dest="search_query",
+        default=settings.default_youtube_search_queries,
+        help="Comma-separated search query list.",
+    )
+    parser.add_argument(
+        "--video-ids",
+        default=settings.default_youtube_video_ids,
+        help="Comma-separated YouTube video IDs.",
+    )
+    parser.add_argument(
+        "--channel-ids",
+        "--subreddits",
+        dest="channel_ids",
+        default=settings.default_youtube_channel_ids,
+        help="Comma-separated YouTube channel IDs.",
+    )
+    parser.add_argument("--max-videos", "--max-posts", dest="max_videos", type=int, default=settings.youtube_max_videos, help="Maximum number of videos to scan.")
     parser.add_argument(
         "--max-comments",
+        "--max-comments-per-video",
+        dest="max_comments_per_video",
         type=int,
-        default=settings.reddit_max_comments_per_post,
-        help="Maximum number of comments to collect per post.",
+        default=settings.youtube_max_comments_per_video,
+        help="Maximum number of comments to collect per video.",
     )
     parser.add_argument(
         "--send-to-kafka",
@@ -56,9 +74,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Send scraped documents to Kafka (true/false).",
     )
     parser.add_argument("--output-jsonl", default="", help="Optional JSONL output path.")
-    parser.add_argument("--sort-mode", default=settings.default_reddit_sort_mode, choices=["relevance", "hot", "new", "top"])
-    parser.add_argument("--time-filter", default=settings.default_reddit_time_filter, help="Optional Reddit time filter.")
-    parser.add_argument("--engine", default=settings.reddit_scraper_engine, help="Scraper engine label for metadata.")
+    parser.add_argument("--order", default=settings.default_youtube_order, choices=["relevance", "date", "viewCount", "rating"])
+    parser.add_argument("--region-code", default=settings.default_youtube_region_code, help="Optional YouTube region code.")
+    parser.add_argument(
+        "--relevance-language",
+        default=settings.default_youtube_relevance_language,
+        help="Optional YouTube relevance language.",
+    )
+    parser.add_argument("--published-after", default=settings.youtube_published_after, help="Optional ISO 8601 lower bound.")
+    parser.add_argument("--published-before", default=settings.youtube_published_before, help="Optional ISO 8601 upper bound.")
+    parser.add_argument("--engine", default="youtube_api", help="Collector engine label for metadata.")
     return parser
 
 
@@ -66,14 +91,18 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    result = run_reddit_collection(
+    result = run_youtube_collection(
         event_name=args.event,
-        keywords=args.keywords,
-        subreddits=args.subreddits,
-        max_posts=int(args.max_posts),
-        max_comments_per_post=int(args.max_comments),
-        sort_mode=str(args.sort_mode),
-        time_filter=str(args.time_filter) or None,
+        search_query=args.search_query,
+        video_ids=args.video_ids,
+        channel_ids=args.channel_ids,
+        max_videos=int(args.max_videos),
+        max_comments_per_video=int(args.max_comments_per_video),
+        order=str(args.order),
+        region_code=str(args.region_code) or None,
+        relevance_language=str(args.relevance_language) or None,
+        published_after=str(args.published_after) or None,
+        published_before=str(args.published_before) or None,
         engine=str(args.engine),
         publish_to_kafka=_parse_bool(args.send_to_kafka),
         backup_to_s3=False,
@@ -84,7 +113,7 @@ def main() -> int:
 
     documents = result.get("documents", [])
     print(f"Status: {result.get('status')}")
-    print(f"Posts scanned: {result.get('posts_scanned', 0)}")
+    print(f"Videos scanned: {result.get('videos_scanned', result.get('posts_scanned', 0))}")
     print(f"Comments collected: {result.get('comments_collected', 0)}")
     print(f"Messages published: {result.get('messages_published', 0)}")
 

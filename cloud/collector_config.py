@@ -1,4 +1,4 @@
-"""Persisted runtime configuration for the Reddit collector."""
+"""Persisted runtime configuration for the YouTube collector."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _resolve_bucket(bucket: str | None = None) -> str:
 
 
 def _resolve_key(key: str | None = None) -> str:
-    return (key or settings.collector_config_s3_key or "config/reddit_collector_runtime.json").strip()
+    return (key or settings.collector_config_s3_key or "config/youtube_collector_runtime.json").strip()
 
 
 def _resolve_region(region: str | None = None) -> str:

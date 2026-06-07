@@ -10,6 +10,7 @@ Create a `.env` file from `.env.example` and make sure the local values are corr
 KAFKA_BOOTSTRAP_SERVERS=localhost:29092
 ELASTICSEARCH_URL=http://localhost:9200
 COLLECTOR_MODE=local
+YOUTUBE_API_KEY=your_api_key_here
 ENABLE_S3_BACKUP=false
 ```
 
@@ -84,19 +85,19 @@ Run the dashboard in another terminal:
 streamlit run dashboard/app.py
 ```
 
-With `COLLECTOR_MODE=local`, the dashboard uses the local Reddit scraper instead of AWS Lambda.
+With `COLLECTOR_MODE=local`, the dashboard uses the local YouTube API collector instead of AWS Lambda.
 
-## 6. Test Scraping Only
+## 6. Test Collection Only
 
-To verify scraping without Kafka:
+To verify collection without Kafka:
 
 ```bash
-python scripts/test_reddit_scraper_local.py --event "World Cup" --keywords "morocco,football" --subreddits "soccer,worldcup" --max-posts 20 --max-comments 50 --send-to-kafka false
+python scripts/test_youtube_api_collector_local.py --event "World Cup" --search-query "morocco football" --max-videos 20 --max-comments 50 --send-to-kafka false --output-jsonl data/youtube_test.jsonl
 ```
 
 This checks:
 
-- scraping
+- YouTube API collection
 - normalization
 - sample output
 
@@ -107,31 +108,21 @@ No Kafka and no Elasticsearch are needed for this test.
 To test the end-to-end local flow:
 
 ```bash
-python scripts/test_reddit_scraper_local.py --event "World Cup" --keywords "morocco,football" --subreddits "soccer,worldcup" --max-posts 20 --max-comments 50 --send-to-kafka true
+python scripts/test_youtube_api_collector_local.py --event "World Cup" --search-query "morocco football" --max-videos 20 --max-comments 50 --send-to-kafka true
 ```
 
 Expected flow:
 
-1. Reddit scraper collects comments
+1. YouTube API collector collects comments
 2. Kafka receives messages on `raw_social_posts`
 3. Spark ensures the required Kafka topics exist
 4. Spark consumes Kafka messages
 5. Spark runs the BERT sentiment layer
 6. Elasticsearch stores the processed results
-7. Streamlit live chart updates
 
-## 8. Recommended Terminal Order
+## 8. Common Problems
 
-1. Terminal 1: `docker compose up -d`
-2. Terminal 2: `python -m storage.init_elasticsearch`
-3. Terminal 3: `spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1 spark_app/streaming_job.py`
-4. Terminal 4: `streamlit run dashboard/app.py`
-5. Terminal 5: optional local scraper test command
-
-## 9. Common Mistakes
-
-- Using `localhost:9092` instead of `localhost:29092` from the host machine.
-- Starting Docker with an old Kafka container that still advertises `kafka:9092`.
-- Starting Spark before Elasticsearch is ready.
+- Missing `YOUTUBE_API_KEY` will stop collection.
+- Kafka bootstrap host mismatch will break producer/consumer connections.
+- Elasticsearch index not created yet will keep the dashboard empty.
 - Forgetting to set `COLLECTOR_MODE=local` when testing the dashboard locally.
-- Expecting Kibana to be part of the current stack. It is not included.

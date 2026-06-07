@@ -83,6 +83,9 @@ def clean_posts(df: DataFrame) -> DataFrame:
         .withColumn("processed_at", F.current_timestamp())
         .withColumn("author", F.coalesce(F.col("author"), F.col("metadata.author")))
         .withColumn("keyword", F.coalesce(F.col("keyword"), F.col("metadata.keyword")))
+        .withColumn("search_query", F.coalesce(F.col("search_query"), F.col("metadata.search_query"), F.col("keyword"), F.col("metadata.keyword")))
+        .withColumn("channel_id", F.coalesce(F.col("channel_id"), F.col("metadata.channel_id")))
+        .withColumn("channel_title", F.coalesce(F.col("channel_title"), F.col("metadata.channel_title")))
         .withColumn("subreddit", F.coalesce(F.col("subreddit"), F.col("metadata.subreddit")))
         .withColumn("post_id", F.coalesce(F.col("post_id"), F.col("metadata.post_id")))
         .withColumn("post_title", F.coalesce(F.col("post_title"), F.col("metadata.post_title")))
@@ -100,6 +103,9 @@ def clean_posts(df: DataFrame) -> DataFrame:
             "original_text",
             "cleaned_text",
             "keyword",
+            "search_query",
+            "channel_id",
+            "channel_title",
             "subreddit",
             "post_id",
             "post_title",
@@ -137,6 +143,9 @@ def add_sentiment_predictions(df: DataFrame) -> DataFrame:
             "original_text",
             "cleaned_text",
             "keyword",
+            "search_query",
+            "channel_id",
+            "channel_title",
             "subreddit",
             "post_id",
             "post_title",

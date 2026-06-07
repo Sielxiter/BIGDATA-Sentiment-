@@ -1,4 +1,4 @@
-"""Streamlit dashboard for Reddit-based sentiment collection."""
+"""Streamlit dashboard for YouTube-based sentiment collection."""
 
 from __future__ import annotations
 
@@ -18,10 +18,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from cloud.reddit_scraper_collector import run_reddit_collection  # noqa: E402
+from cloud.youtube_api_collector import run_youtube_collection  # noqa: E402
 from cloud.collector_config import save_collector_runtime_config  # noqa: E402
 from config.settings import settings  # noqa: E402
-from dashboard.aws_lambda import LambdaInvokeError, invoke_reddit_collector_lambda  # noqa: E402
+from dashboard.aws_lambda import LambdaInvokeError, invoke_youtube_collector_lambda  # noqa: E402
 
 
 KAFKA_TOPIC = settings.kafka_raw_topic
@@ -29,8 +29,7 @@ LAMBDA_FUNCTION_NAME = settings.collector_lambda_function_name
 LAMBDA_REGION = settings.collector_lambda_region
 COLLECTOR_MODE = settings.collector_mode
 COLLECTOR_SOURCE = settings.collector_source
-SORT_OPTIONS = ["relevance", "hot", "new", "top"]
-TIME_FILTER_OPTIONS = ["", "hour", "day", "week", "month", "year", "all"]
+SORT_OPTIONS = ["relevance", "date", "viewCount", "rating"]
 SENTIMENT_CHART_COLORS = [
     "#43A5D8",
     "#E33163",
@@ -223,12 +222,12 @@ def render_target_summary() -> None:
 def render_flow_summary() -> None:
     st.markdown("### Flow")
     if COLLECTOR_MODE == "lambda":
-        flow = "Streamlit -> S3 saved config -> EventBridge / Streamlit invoke -> AWS Lambda -> Reddit public pages -> Kafka -> Spark -> Elasticsearch"
+        flow = "Streamlit -> S3 saved config -> EventBridge / Streamlit invoke -> AWS Lambda -> YouTube Data API -> Kafka -> Spark -> Elasticsearch"
     else:
-        flow = "Streamlit -> local Reddit scraper -> Kafka -> Spark -> Elasticsearch"
+        flow = "Streamlit -> local YouTube API collector -> Kafka -> Spark -> Elasticsearch"
     st.code(flow, language="text")
     st.info(
-        "The collector uses public Reddit pages and JSON endpoints. It does not require Reddit API credentials."
+        "The collector uses the YouTube Data API and requires a valid YOUTUBE_API_KEY."
     )
 
 
@@ -245,7 +244,7 @@ def render_success(result: dict[str, Any]) -> None:
     if not body:
         body = result
 
-    posts_scanned = body.get("posts_scanned")
+    posts_scanned = body.get("videos_scanned", body.get("posts_scanned"))
     comments_collected = body.get("comments_collected")
     messages_published = body.get("messages_published", comments_collected)
     session_id = body.get("session_id")
@@ -255,12 +254,12 @@ def render_success(result: dict[str, Any]) -> None:
     errors = body.get("errors") or body.get("warnings") or []
 
     if body.get("status") == "ok":
-        st.success("Reddit comments collected successfully.")
+        st.success("YouTube comments collected successfully.")
     else:
         st.warning("Collection finished with warnings.")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Posts scanned", format_int(posts_scanned))
+    c1.metric("Videos scanned", format_int(posts_scanned))
     c2.metric("Comments collected", format_int(comments_collected))
     c3.metric("Published", format_int(messages_published))
     c4.metric("Topic", str(kafka_topic or KAFKA_TOPIC))
@@ -272,7 +271,7 @@ def render_success(result: dict[str, Any]) -> None:
     if s3_backup_key:
         st.markdown("### S3 Backup")
         st.code(str(s3_backup_key), language="text")
-        st.caption("This JSONL object stores the raw Reddit comments.")
+        st.caption("This JSONL object stores the raw YouTube comments.")
     elif backup_error:
         st.warning(f"S3 backup issue: {backup_error}")
 
@@ -335,22 +334,30 @@ def render_live_sentiment_panel() -> None:
 def invoke_local_collection(
     *,
     event_name: str,
-    keywords: str,
-    subreddits: str,
-    max_posts: int,
-    max_comments_per_post: int,
-    sort_mode: str,
-    time_filter: str,
+    search_query: str,
+    video_ids: str,
+    channel_ids: str,
+    max_videos: int,
+    max_comments_per_video: int,
+    order: str,
+    region_code: str,
+    relevance_language: str,
+    published_after: str,
+    published_before: str,
     engine: str,
 ) -> dict[str, Any]:
-    return run_reddit_collection(
+    return run_youtube_collection(
         event_name=event_name,
-        keywords=keywords,
-        subreddits=subreddits,
-        max_posts=max_posts,
-        max_comments_per_post=max_comments_per_post,
-        sort_mode=sort_mode,
-        time_filter=time_filter or None,
+        search_query=search_query,
+        video_ids=video_ids,
+        channel_ids=channel_ids,
+        max_videos=max_videos,
+        max_comments_per_video=max_comments_per_video,
+        order=order,
+        region_code=region_code or None,
+        relevance_language=relevance_language or None,
+        published_after=published_after or None,
+        published_before=published_before or None,
         engine=engine,
         publish_to_kafka=True,
         backup_to_s3=settings.enable_s3_backup,
@@ -366,22 +373,30 @@ def invoke_local_collection(
 def invoke_lambda_collection(
     *,
     event_name: str,
-    keywords: str,
-    subreddits: str,
-    max_posts: int,
-    max_comments_per_post: int,
-    sort_mode: str,
-    time_filter: str,
+    search_query: str,
+    video_ids: str,
+    channel_ids: str,
+    max_videos: int,
+    max_comments_per_video: int,
+    order: str,
+    region_code: str,
+    relevance_language: str,
+    published_after: str,
+    published_before: str,
     engine: str,
 ) -> dict[str, Any]:
-    result = invoke_reddit_collector_lambda(
+    result = invoke_youtube_collector_lambda(
         event_name=event_name,
-        keywords=keywords,
-        subreddits=subreddits,
-        max_posts=max_posts,
-        max_comments_per_post=max_comments_per_post,
-        sort_mode=sort_mode,
-        time_filter=time_filter,
+        search_query=search_query,
+        video_ids=video_ids,
+        channel_ids=channel_ids,
+        max_videos=max_videos,
+        max_comments_per_video=max_comments_per_video,
+        order=order,
+        region_code=region_code,
+        relevance_language=relevance_language,
+        published_after=published_after,
+        published_before=published_before,
         engine=engine,
         function_name=LAMBDA_FUNCTION_NAME,
         region_name=LAMBDA_REGION,
@@ -392,28 +407,36 @@ def invoke_lambda_collection(
 def build_collector_runtime_config(
     *,
     event_name: str,
-    keywords: str,
-    subreddits: str,
-    max_posts: int,
-    max_comments_per_post: int,
-    sort_mode: str,
-    time_filter: str,
+    search_query: str,
+    video_ids: str,
+    channel_ids: str,
+    max_videos: int,
+    max_comments_per_video: int,
+    order: str,
+    region_code: str,
+    relevance_language: str,
+    published_after: str,
+    published_before: str,
     engine: str,
 ) -> dict[str, Any]:
     return {
         "event_name": event_name,
-        "keywords": keywords,
-        "subreddits": subreddits,
-        "max_posts": int(max_posts),
-        "max_comments_per_post": int(max_comments_per_post),
-        "sort_mode": sort_mode,
-        "time_filter": time_filter,
+        "search_query": search_query,
+        "video_ids": video_ids,
+        "channel_ids": channel_ids,
+        "max_videos": int(max_videos),
+        "max_comments_per_video": int(max_comments_per_video),
+        "order": order,
+        "region_code": region_code,
+        "relevance_language": relevance_language,
+        "published_after": published_after,
+        "published_before": published_before,
         "engine": engine,
     }
 
 
 def main() -> None:
-    st.set_page_config(page_title="Reddit Sentiment Dashboard", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="YouTube Sentiment Dashboard", layout="wide", initial_sidebar_state="collapsed")
     apply_simple_style()
 
     with st.sidebar:
@@ -422,11 +445,11 @@ def main() -> None:
         refresh_seconds = st.number_input("Refresh every seconds", min_value=3, max_value=60, value=5, step=1)
         st.caption("Disable while typing if the page refreshes too often.")
         st.markdown("### Deployment")
-        st.write("Use `COLLECTOR_MODE=lambda` for AWS-triggered scraping.")
+        st.write("Use `COLLECTOR_MODE=lambda` for AWS-triggered collection.")
         st.write("Use the top event filter to narrow live Elasticsearch charts.")
 
-    st.title("Reddit Sentiment Dashboard")
-    st.caption("Collect public Reddit comments, publish them to Kafka, and watch Spark/BERT results update live.")
+    st.title("YouTube Sentiment Dashboard")
+    st.caption("Collect public YouTube comments, publish them to Kafka, and watch Spark/BERT results update live.")
     st.markdown(f"<span class='collector-badge'>Collector mode: {COLLECTOR_MODE}</span>", unsafe_allow_html=True)
 
     available_events, event_error = load_available_events()
@@ -453,71 +476,106 @@ def main() -> None:
 
     with left:
         with st.container(border=True):
-            st.markdown("### Collect Reddit Data")
+            st.markdown("### Collect YouTube Data")
             if COLLECTOR_MODE == "lambda":
                 st.info(
-                    "Lambda mode saves the chosen event/keyword settings to S3 so your scheduled EventBridge runs use them. "
+                    "Lambda mode saves the chosen event/query settings to S3 so your scheduled EventBridge runs use them. "
                     "This button also runs Lambda immediately after saving."
                 )
             else:
                 st.info("Local mode runs the collector directly from Streamlit.")
 
-            with st.form("reddit_collector_form", clear_on_submit=False):
+            with st.form("youtube_collector_form", clear_on_submit=False):
                 event_name = st.text_input("Event name", value=settings.default_event_name)
-                keywords_raw = st.text_input("Keywords (comma-separated)", value=settings.default_reddit_keywords)
-                subreddits_raw = st.text_input(
-                    "Subreddits (comma-separated, optional)",
-                    value=settings.default_reddit_subreddits,
+                search_query_raw = st.text_input(
+                    "Search queries (comma-separated)",
+                    value=settings.default_youtube_search_queries,
+                )
+                video_ids_raw = st.text_input(
+                    "Video IDs (comma-separated, optional)",
+                    value=settings.default_youtube_video_ids,
+                )
+                channel_ids_raw = st.text_input(
+                    "Channel IDs (comma-separated, optional)",
+                    value=settings.default_youtube_channel_ids,
                 )
                 c1, c2 = st.columns(2)
                 with c1:
-                    max_posts = st.number_input("Max posts", min_value=1, max_value=200, value=settings.reddit_max_posts, step=1)
+                    max_videos = st.number_input("Max videos", min_value=1, max_value=200, value=settings.youtube_max_videos, step=1)
                 with c2:
                     max_comments = st.number_input(
                         "Max comments per post",
                         min_value=1,
                         max_value=200,
-                        value=settings.reddit_max_comments_per_post,
+                        value=settings.youtube_max_comments_per_video,
                         step=1,
                     )
 
                 c3, c4 = st.columns(2)
                 with c3:
-                    sort_mode = st.selectbox("Sort mode", SORT_OPTIONS, index=SORT_OPTIONS.index(settings.default_reddit_sort_mode) if settings.default_reddit_sort_mode in SORT_OPTIONS else 0)
+                    order = st.selectbox(
+                        "Order",
+                        SORT_OPTIONS,
+                        index=SORT_OPTIONS.index(settings.default_youtube_order)
+                        if settings.default_youtube_order in SORT_OPTIONS
+                        else 0,
+                    )
                 with c4:
-                    time_filter = st.selectbox(
-                        "Time filter",
-                        TIME_FILTER_OPTIONS,
-                        index=TIME_FILTER_OPTIONS.index(settings.default_reddit_time_filter) if settings.default_reddit_time_filter in TIME_FILTER_OPTIONS else 0,
-                        format_func=lambda value: "None" if value == "" else value,
+                    region_code = st.text_input(
+                        "Region code (optional)",
+                        value=settings.default_youtube_region_code,
                     )
 
-                engine = st.selectbox(
-                    "Scraper engine",
-                    ["requests", "selenium"],
-                    index=0 if settings.reddit_scraper_engine not in {"requests", "selenium"} else ["requests", "selenium"].index(settings.reddit_scraper_engine),
+                c5, c6 = st.columns(2)
+                with c5:
+                    relevance_language = st.text_input(
+                        "Relevance language (optional)",
+                        value=settings.default_youtube_relevance_language,
+                    )
+                with c6:
+                    engine = st.text_input(
+                        "Engine label",
+                        value="youtube_api",
+                        help="Stored as metadata for traceability.",
+                    )
+
+                published_after = st.text_input(
+                    "Published after (optional, ISO 8601)",
+                    value=settings.youtube_published_after,
+                )
+                published_before = st.text_input(
+                    "Published before (optional, ISO 8601)",
+                    value=settings.youtube_published_before,
                 )
 
-                submit_label = "Save settings & run Lambda now" if COLLECTOR_MODE == "lambda" else "Collect Reddit Comments"
+                submit_label = "Save settings & run Lambda now" if COLLECTOR_MODE == "lambda" else "Collect YouTube Comments"
                 submitted = st.form_submit_button(submit_label, use_container_width=True)
 
             if submitted:
                 if not event_name.strip():
                     st.error("Event name is required.")
-                elif not keywords_raw.strip():
-                    st.error("Keywords are required.")
+                elif not search_query_raw.strip() and not video_ids_raw.strip():
+                    st.error("Provide at least one search query or video ID.")
                 else:
                     runtime_config = build_collector_runtime_config(
                         event_name=event_name.strip(),
-                        keywords=keywords_raw.strip(),
-                        subreddits=subreddits_raw.strip(),
-                        max_posts=int(max_posts),
-                        max_comments_per_post=int(max_comments),
-                        sort_mode=sort_mode,
-                        time_filter=time_filter,
+                        search_query=search_query_raw.strip(),
+                        video_ids=video_ids_raw.strip(),
+                        channel_ids=channel_ids_raw.strip(),
+                        max_videos=int(max_videos),
+                        max_comments_per_video=int(max_comments),
+                        order=order,
+                        region_code=region_code.strip(),
+                        relevance_language=relevance_language.strip(),
+                        published_after=published_after.strip(),
+                        published_before=published_before.strip(),
                         engine=engine,
                     )
-                    with st.spinner("Collecting Reddit comments..." if COLLECTOR_MODE != "lambda" else "Saving settings and triggering Lambda..."):
+                    with st.spinner(
+                        "Collecting YouTube comments..."
+                        if COLLECTOR_MODE != "lambda"
+                        else "Saving settings and triggering Lambda..."
+                    ):
                         try:
                             if COLLECTOR_MODE == "lambda":
                                 saved_key, save_error = save_collector_runtime_config(
@@ -531,12 +589,16 @@ def main() -> None:
                                 else:
                                     result = invoke_lambda_collection(
                                         event_name=runtime_config["event_name"],
-                                        keywords=runtime_config["keywords"],
-                                        subreddits=runtime_config["subreddits"],
-                                        max_posts=runtime_config["max_posts"],
-                                        max_comments_per_post=runtime_config["max_comments_per_post"],
-                                        sort_mode=runtime_config["sort_mode"],
-                                        time_filter=runtime_config["time_filter"],
+                                        search_query=runtime_config["search_query"],
+                                        video_ids=runtime_config["video_ids"],
+                                        channel_ids=runtime_config["channel_ids"],
+                                        max_videos=runtime_config["max_videos"],
+                                        max_comments_per_video=runtime_config["max_comments_per_video"],
+                                        order=runtime_config["order"],
+                                        region_code=runtime_config["region_code"],
+                                        relevance_language=runtime_config["relevance_language"],
+                                        published_after=runtime_config["published_after"],
+                                        published_before=runtime_config["published_before"],
                                         engine=runtime_config["engine"],
                                     )
                                     body = _extract_lambda_body(result)
@@ -557,19 +619,23 @@ def main() -> None:
                             else:
                                 result = invoke_local_collection(
                                     event_name=runtime_config["event_name"],
-                                    keywords=runtime_config["keywords"],
-                                    subreddits=runtime_config["subreddits"],
-                                    max_posts=runtime_config["max_posts"],
-                                    max_comments_per_post=runtime_config["max_comments_per_post"],
-                                    sort_mode=runtime_config["sort_mode"],
-                                    time_filter=runtime_config["time_filter"],
+                                    search_query=runtime_config["search_query"],
+                                    video_ids=runtime_config["video_ids"],
+                                    channel_ids=runtime_config["channel_ids"],
+                                    max_videos=runtime_config["max_videos"],
+                                    max_comments_per_video=runtime_config["max_comments_per_video"],
+                                    order=runtime_config["order"],
+                                    region_code=runtime_config["region_code"],
+                                    relevance_language=runtime_config["relevance_language"],
+                                    published_after=runtime_config["published_after"],
+                                    published_before=runtime_config["published_before"],
                                     engine=runtime_config["engine"],
                                 )
                                 render_success(result)
                         except LambdaInvokeError as exc:
                             render_error(exc)
                         except Exception as exc:
-                            st.error(f"Unexpected error while collecting Reddit data: {exc}")
+                            st.error(f"Unexpected error while collecting YouTube data: {exc}")
 
             render_last_response()
 
@@ -585,7 +651,7 @@ def main() -> None:
             render_flow_summary()
             st.markdown("### Notes")
             st.write("- Streamlit on EC2 should use an instance profile or configured AWS CLI credentials.")
-            st.write("- The collector uses respectful delays and public Reddit pages or JSON endpoints.")
+            st.write("- The collector uses the YouTube Data API and requires an API key with quota available.")
             st.write("- Spark reads Kafka, applies the BERT model, and writes processed results to Elasticsearch.")
 
     if auto_refresh:

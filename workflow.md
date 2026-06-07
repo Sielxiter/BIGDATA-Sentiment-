@@ -6,25 +6,27 @@ Target flow:
 
 ## 1. Collector
 
-Deploy `cloud/lambda_reddit_to_kafka.py` as the Lambda handler.
+Deploy `cloud/lambda_youtube_to_kafka.py` as the Lambda handler.
 
 Environment variables:
 
-- `COLLECTOR_SOURCE=reddit`
+- `COLLECTOR_SOURCE=youtube`
 - `COLLECTOR_MODE=lambda`
-- `COLLECTOR_LAMBDA_FUNCTION_NAME=reddit-collector-to-kafka`
+- `COLLECTOR_LAMBDA_FUNCTION_NAME=youtube-collector-to-kafka`
 - `COLLECTOR_LAMBDA_REGION=eu-north-1`
 - `KAFKA_BOOTSTRAP_SERVERS`
 - `KAFKA_RAW_TOPIC`
 - `S3_BUCKET_NAME`
 - `S3_PREFIX`
 - `ENABLE_S3_BACKUP`
-- `REDDIT_SCRAPER_ENGINE`
-- `REDDIT_REQUEST_DELAY_SECONDS`
-- `REDDIT_TIMEOUT_SECONDS`
-- `REDDIT_HEADLESS`
+- `YOUTUBE_API_KEY`
+- `YOUTUBE_REQUEST_DELAY_SECONDS`
+- `YOUTUBE_API_TIMEOUT_SECONDS`
+- `YOUTUBE_USER_AGENT`
+- `YOUTUBE_PUBLISHED_AFTER`
+- `YOUTUBE_PUBLISHED_BEFORE`
 
-The collector scrapes public Reddit posts and comments with respectful delays.
+The collector uses the YouTube Data API and a valid API key with quota. Respectful pacing is enabled to reduce burst traffic.
 
 ## 2. Kafka on EC2
 
@@ -41,7 +43,7 @@ Run:
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1 spark_app/streaming_job.py
 ```
 
-Spark accepts Reddit messages where `source="reddit"`.
+Spark accepts YouTube messages where `source="youtube"`.
 
 ## 4. Fine-tuned BERT on EC2
 
@@ -61,14 +63,14 @@ Run:
 streamlit run dashboard/app.py
 ```
 
-Set `COLLECTOR_MODE=local` for local scraping during testing, or `COLLECTOR_MODE=lambda` to invoke AWS Lambda.
+Set `COLLECTOR_MODE=local` for local collection during testing, or `COLLECTOR_MODE=lambda` to invoke AWS Lambda.
 
-## Local Reddit scraping test
+## Local YouTube API test
 
 Run:
 
 ```bash
-python scripts/test_reddit_scraper_local.py --event "World Cup" --keywords "morocco,football" --subreddits "soccer,worldcup" --max-posts 20 --max-comments 50 --output-jsonl data/reddit_test.jsonl
+python scripts/test_youtube_api_collector_local.py --event "World Cup" --search-query "morocco football" --max-videos 20 --max-comments 50 --output-jsonl data/youtube_test.jsonl
 ```
 
 To send the same data to Kafka, add:
@@ -79,11 +81,11 @@ To send the same data to Kafka, add:
 
 Expected output:
 
-- posts scanned
+- videos scanned
 - comments collected
 - 3 sample documents
 - optional JSONL file
 
 ## Lambda limitation
 
-Selenium and Playwright are intentionally not required in the default build because they add browser runtime overhead in Lambda. The current collector uses `requests` and Reddit's public JSON endpoints, which keeps the code path lighter and easier to deploy. If Reddit changes its structure, a browser-based fallback can be added later.
+The current collector uses the YouTube Data API and does not require browser automation. If API quota becomes a problem, reduce request volume or widen the schedule interval instead of trying to scrape around quota.

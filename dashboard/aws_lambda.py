@@ -1,4 +1,4 @@
-"""AWS Lambda helpers for the Streamlit dashboard.
+﻿"""AWS Lambda helpers for the Streamlit dashboard.
 
 This module intentionally does not manage credentials. boto3 will use the
 instance profile on EC2 or any configured AWS credentials available at runtime.
@@ -10,13 +10,10 @@ import json
 from typing import Any
 
 import boto3
-from botocore.exceptions import (
-    ClientError,
-    NoCredentialsError,
-    PartialCredentialsError,
-)
+from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
 
 from config.settings import settings
+
 
 class LambdaInvokeError(RuntimeError):
     """Raised when Lambda invocation fails in a user-actionable way."""
@@ -26,29 +23,68 @@ class LambdaInvokeError(RuntimeError):
         self.details = details or {}
 
 
-def invoke_reddit_collector_lambda(
+def _build_payload(
     *,
     event_name: str,
-    keywords: str,
-    subreddits: str = "",
-    max_posts: int = 20,
-    max_comments_per_post: int = 50,
-    sort_mode: str = "relevance",
-    time_filter: str = "",
-    engine: str = "requests",
+    search_query: str,
+    video_ids: str = "",
+    channel_ids: str = "",
+    max_videos: int = 20,
+    max_comments_per_video: int = 50,
+    order: str = "relevance",
+    region_code: str = "",
+    relevance_language: str = "",
+    published_after: str = "",
+    published_before: str = "",
+    engine: str = "youtube_api",
+) -> dict[str, Any]:
+    return {
+        "event_name": event_name,
+        "search_query": search_query,
+        "video_ids": video_ids,
+        "channel_ids": channel_ids,
+        "max_videos": int(max_videos),
+        "max_comments_per_video": int(max_comments_per_video),
+        "order": order,
+        "region_code": region_code,
+        "relevance_language": relevance_language,
+        "published_after": published_after,
+        "published_before": published_before,
+        "engine": engine,
+    }
+
+
+def invoke_youtube_collector_lambda(
+    *,
+    event_name: str,
+    search_query: str,
+    video_ids: str = "",
+    channel_ids: str = "",
+    max_videos: int = 20,
+    max_comments_per_video: int = 50,
+    order: str = "relevance",
+    region_code: str = "",
+    relevance_language: str = "",
+    published_after: str = "",
+    published_before: str = "",
+    engine: str = "youtube_api",
     function_name: str = settings.collector_lambda_function_name,
     region_name: str = settings.collector_lambda_region,
 ) -> dict[str, Any]:
-    payload = {
-        "event_name": event_name,
-        "keywords": keywords,
-        "subreddits": subreddits,
-        "max_posts": int(max_posts),
-        "max_comments_per_post": int(max_comments_per_post),
-        "sort_mode": sort_mode,
-        "time_filter": time_filter,
-        "engine": engine,
-    }
+    payload = _build_payload(
+        event_name=event_name,
+        search_query=search_query,
+        video_ids=video_ids,
+        channel_ids=channel_ids,
+        max_videos=max_videos,
+        max_comments_per_video=max_comments_per_video,
+        order=order,
+        region_code=region_code,
+        relevance_language=relevance_language,
+        published_after=published_after,
+        published_before=published_before,
+        engine=engine,
+    )
 
     try:
         lambda_client = boto3.client("lambda", region_name=region_name)
@@ -69,7 +105,6 @@ def invoke_reddit_collector_lambda(
             ) from exc
         raise LambdaInvokeError(f"Lambda invocation failed: {code or str(exc)}") from exc
 
-    # Lambda can return an HTTP-style payload dict (our function does) or a raw object.
     function_error = response.get("FunctionError")
     raw_payload = response.get("Payload")
     if raw_payload is None:
@@ -85,7 +120,6 @@ def invoke_reddit_collector_lambda(
     except json.JSONDecodeError as exc:
         raise LambdaInvokeError(f"JSON parsing error from Lambda response: {exc}. Raw: {body_text[:500]}") from exc
 
-    # Our Lambda returns: {"statusCode": 200, "body": "<json string>"}
     if isinstance(decoded, dict) and "body" in decoded and isinstance(decoded["body"], str):
         try:
             decoded_body = json.loads(decoded["body"]) if decoded["body"] else {}
@@ -106,7 +140,5 @@ def invoke_reddit_collector_lambda(
     return {"request_payload": payload, "raw_response": response, "decoded": decoded}
 
 
-def invoke_youtube_collector_lambda(**kwargs: Any) -> dict[str, Any]:
-    """Compatibility alias for older code paths."""
-
-    return invoke_reddit_collector_lambda(**kwargs)
+# Backward-compatible alias for older code paths.
+invoke_reddit_collector_lambda = invoke_youtube_collector_lambda

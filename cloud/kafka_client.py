@@ -31,7 +31,7 @@ def build_kafka_config(*, bootstrap_servers: str | None = None) -> dict[str, Any
 
     config: dict[str, Any] = {
         "bootstrap.servers": bootstrap,
-        "client.id": _env("KAFKA_CLIENT_ID", "reddit-collector-lambda"),
+        "client.id": _env("KAFKA_CLIENT_ID", "youtube-collector-lambda"),
     }
 
     security_protocol = _env("KAFKA_SECURITY_PROTOCOL", "")

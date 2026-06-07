@@ -4,13 +4,11 @@ This document explains the current project state, the target AWS deployment, and
 
 ## 1. Project Goal
 
-Build a sentiment analysis platform for public Reddit data with this production workflow:
+Build a sentiment analysis platform for public YouTube comments with this production workflow:
 
 `AWS Lambda -> Kafka on EC2 -> Spark on EC2 -> Fine-tuned BERT on EC2 -> Elasticsearch on EC2 -> Streamlit on EC2`
 
-The project no longer depends on the YouTube API. The collector now scrapes public Reddit posts and comments, normalizes them, publishes them to Kafka, and can optionally save a JSONL backup to S3.
-
-The Streamlit dashboard can run the collector locally for testing or invoke Lambda in AWS mode depending on `COLLECTOR_MODE`.
+The active collector now uses the YouTube Data API. Streamlit can run the collector locally for testing or invoke Lambda in AWS mode depending on `COLLECTOR_MODE`. Lambda can reuse the latest saved collector settings from S3 when EventBridge triggers it on a schedule.
 
 ## 2. Important Constraints
 
@@ -21,8 +19,8 @@ The Streamlit dashboard can run the collector locally for testing or invoke Lamb
 - Lambda must be able to reach Kafka over the network.
 - Lambda may optionally write a backup JSONL file to S3.
 - The raw Kafka topic must remain `raw_social_posts`.
-- Respectful scraping delays must remain enabled.
-- Selenium or Playwright are not required for the default build because the current collector uses public Reddit JSON endpoints and `requests`.
+- Respectful API pacing must remain enabled.
+- The collector depends on the YouTube Data API and a valid API key with quota.
 
 ## 3. Current Active Repository Tree
 
@@ -30,15 +28,20 @@ Only the files below are part of the current workflow.
 
 ### `cloud/`
 
-- `cloud/reddit_scraper_collector.py`
-  - Reddit collector that scrapes public posts and comments.
+- `cloud/youtube_api_collector.py`
+  - Active YouTube collector that searches videos and collects public comments through the YouTube Data API.
   - Normalizes documents into Kafka-ready JSON.
   - Supports local mode and Lambda mode.
-  - Uses `requests` and Reddit public JSON endpoints with delays.
+
+- `cloud/reddit_scraper_collector.py`
+  - Compatibility wrapper that re-exports the YouTube collector for older import paths.
+
+- `cloud/lambda_youtube_to_kafka.py`
+  - AWS Lambda handler for the YouTube collector.
+  - Collects comments, publishes them to Kafka, and optionally uploads a JSONL backup to S3.
 
 - `cloud/lambda_reddit_to_kafka.py`
-  - AWS Lambda handler for the Reddit collector.
-  - Collects Reddit comments, publishes them to Kafka, and optionally uploads a JSONL backup to S3.
+  - Compatibility wrapper that forwards to the YouTube Lambda handler.
 
 - `cloud/kafka_client.py`
   - Reusable Kafka producer helper for Lambda and cloud-side code.
@@ -57,7 +60,7 @@ Only the files below are part of the current workflow.
 ### `dashboard/`
 
 - `dashboard/app.py`
-  - Streamlit dashboard for Reddit collection.
+  - Streamlit dashboard for YouTube collection.
   - Supports `COLLECTOR_MODE=local` and `COLLECTOR_MODE=lambda`.
   - Shows the live Elasticsearch sentiment chart and collection results.
 
@@ -77,11 +80,11 @@ Only the files below are part of the current workflow.
 
 - `spark_app/transformations.py`
   - Data-cleaning and feature transformation helpers used by the Spark job.
-  - Accepts Reddit messages with `source="reddit"`.
+  - Accepts YouTube messages with `source="youtube"`.
 
 - `spark_app/schemas.py`
   - Defines the expected schema for raw Kafka messages.
-  - Includes Reddit fields such as `subreddit`, `post_id`, `comment_id`, and `collected_at`.
+  - Includes YouTube fields such as `channel_id`, `channel_title`, `video_id`, `video_title`, and `collected_at`.
 
 - `spark_app/__init__.py`
   - Package marker.
@@ -115,7 +118,7 @@ Only the files below are part of the current workflow.
 
 - `storage/index_mapping.py`
   - Elasticsearch mapping for the processed sentiment index.
-  - Includes Reddit metadata fields.
+  - Includes YouTube metadata fields.
 
 - `storage/init_elasticsearch.py`
   - Utility to create the Elasticsearch index.
@@ -132,7 +135,7 @@ Only the files below are part of the current workflow.
 
 - `config/settings.py`
   - Central environment-based configuration.
-  - Holds Kafka, Elasticsearch, collector, backup, and model settings.
+  - Holds Kafka, Elasticsearch, collector, backup, API key, and model settings.
 
 - `config/__init__.py`
   - Package marker.
@@ -140,7 +143,7 @@ Only the files below are part of the current workflow.
 ### Root files
 
 - `README.md`
-  - Short summary of the project and the current Reddit workflow.
+  - Short summary of the project and the current YouTube workflow.
 
 - `workflow.md`
   - Production workflow notes and local testing instructions.
@@ -151,8 +154,8 @@ Only the files below are part of the current workflow.
 - `.env.example`
   - Example environment variables for local development and deployment.
 
-- `scripts/test_reddit_scraper_local.py`
-  - Local test script for scraping Reddit without sending to Kafka.
+- `scripts/test_youtube_api_collector_local.py`
+  - Legacy filename, now used as the local YouTube API collector test script.
 
 ## 4. What Was Removed From the Main Workflow
 
@@ -164,7 +167,6 @@ These were removed because they are not part of the current AWS EC2 + Lambda pro
 - `data/`
 - `checkpoints/`
 - `tools/`
-- `docker-compose.yml`
 - `context.md`
 - `spark.md`
 - `wsl.md`
@@ -177,7 +179,7 @@ When helping with AWS setup, assume this target architecture:
 
 1. `AWS Lambda`
    - Deployed as a serverless function.
-   - Runs the Reddit collector in Lambda mode.
+   - Runs the YouTube collector in Lambda mode.
    - Publishes normalized comments directly to Kafka.
    - Optionally writes a backup JSONL file to S3.
    - Reads the latest saved collector parameters from S3 when invoked without an explicit payload, which allows EventBridge scheduled runs to reuse the settings chosen in Streamlit.
@@ -203,7 +205,7 @@ When helping with AWS setup, assume this target architecture:
 6. `Streamlit on EC2`
    - Serves the dashboard UI.
    - Can invoke Lambda or run the local collector directly depending on `COLLECTOR_MODE`.
-   - Can save the active Lambda collector settings to S3 so scheduled Lambda runs use the selected event, keywords, subreddits, max posts, and max comments per post.
+   - Can save the active Lambda collector settings to S3 so scheduled Lambda runs use the selected event, search query, video IDs, channel IDs, and comment limits.
 
 ## 6. Important Environment Variables
 
@@ -230,33 +232,38 @@ When configuring AWS and EC2, these are the most important values:
 - `S3_BUCKET_NAME`
 - `S3_PREFIX`
 - `ENABLE_S3_BACKUP`
-- `REDDIT_SCRAPER_ENGINE`
-- `REDDIT_MAX_POSTS`
-- `REDDIT_MAX_COMMENTS_PER_POST`
-- `REDDIT_REQUEST_DELAY_SECONDS`
-- `REDDIT_TIMEOUT_SECONDS`
-- `REDDIT_HEADLESS`
+- `YOUTUBE_API_KEY`
+- `YOUTUBE_MAX_VIDEOS`
+- `YOUTUBE_MAX_COMMENTS_PER_VIDEO`
+- `YOUTUBE_REQUEST_DELAY_SECONDS`
+- `YOUTUBE_API_TIMEOUT_SECONDS`
+- `YOUTUBE_USER_AGENT`
+- `YOUTUBE_PUBLISHED_AFTER`
+- `YOUTUBE_PUBLISHED_BEFORE`
 
 ## 7. How the Streamlit Dashboard Works
 
 - The user enters:
   - event name
-  - keywords
-  - optional subreddits
-  - max posts
-  - max comments per post
-  - sort mode
-  - time filter
-  - scraper engine label
-- The dashboard now includes:
+  - search queries
+  - optional video IDs
+  - optional channel IDs
+  - max videos
+  - max comments per video
+  - order
+  - region code
+  - relevance language
+  - optional published-after / published-before bounds
+  - engine label
+- The dashboard includes:
   - a top-level event filter for the live Elasticsearch chart
-  - a Lambda settings save flow for event/keyword/subreddit/post-limit changes
-- If `COLLECTOR_MODE=local`, the dashboard runs the local Reddit collector directly.
+  - a Lambda settings save flow for query/video/channel limit changes
+- If `COLLECTOR_MODE=local`, the dashboard runs the local YouTube collector directly.
 - If `COLLECTOR_MODE=lambda`, the dashboard saves the chosen collector settings to S3 and can also trigger the Lambda collector with `boto3` for an immediate run.
 - The dashboard displays:
   - status
   - session id
-  - posts scanned
+  - videos scanned
   - comments collected
   - Kafka topic
   - optional S3 backup key
@@ -265,15 +272,15 @@ When configuring AWS and EC2, these are the most important values:
 
 ## 8. Local Testing Flow
 
-To test scraping without sending data to Kafka, use:
+To test collection without sending data to Kafka, use:
 
 ```bash
-python scripts/test_reddit_scraper_local.py --event "World Cup" --keywords "morocco,football" --subreddits "soccer,worldcup" --max-posts 20 --max-comments 50 --send-to-kafka false
+python scripts/test_youtube_api_collector_local.py --event "World Cup" --search-query "morocco football" --max-videos 20 --max-comments 50 --send-to-kafka false
 ```
 
 This prints:
 
-- number of posts scanned
+- number of videos scanned
 - number of comments collected
 - 3 sample documents
 
@@ -295,4 +302,4 @@ If asked how to deploy this project on AWS, focus on:
 
 ## 10. Short One-Line Summary
 
-This is an AWS-first Reddit sentiment platform where Streamlit can trigger a Lambda collector or run locally, the collector publishes raw Reddit comments to Kafka and optionally S3, Spark processes the stream, BERT classifies sentiment, Elasticsearch stores results, and Streamlit displays them.
+This is an AWS-first YouTube sentiment platform where Streamlit can trigger a Lambda collector or run locally, the collector publishes raw YouTube comments to Kafka and optionally S3, Spark processes the stream, BERT classifies sentiment, Elasticsearch stores results, and Streamlit displays them.

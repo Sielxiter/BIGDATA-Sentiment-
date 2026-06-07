@@ -1,6 +1,6 @@
 # sentiment-bigdata-platform
 
-Big Data sentiment analysis pipeline for public Reddit data.
+Big Data sentiment analysis pipeline for public YouTube comments.
 
 ## Workflow
 
@@ -8,12 +8,12 @@ Big Data sentiment analysis pipeline for public Reddit data.
 
 ## What changed
 
-The project no longer depends on the YouTube API. The collector now scrapes public Reddit posts and comments using `requests` plus Reddit's public JSON endpoints, which makes the demo usable without Reddit API credentials.
+The active collector now uses the YouTube Data API. The dashboard can run the collector locally for testing or invoke Lambda in AWS mode, and Lambda can reuse the latest saved collector settings from S3.
 
 ## Main files
 
-- `cloud/reddit_scraper_collector.py`
-- `cloud/lambda_reddit_to_kafka.py`
+- `cloud/youtube_api_collector.py`
+- `cloud/lambda_youtube_to_kafka.py`
 - `cloud/kafka_client.py`
 - `cloud/s3_backup.py`
 - `cloud/collector_config.py`
@@ -41,19 +41,20 @@ This brings up:
 
 Then run Spark and Streamlit separately from your Python environment if you want to keep them outside Docker.
 
-## Local Reddit scraping test
+## Local YouTube API test
 
 1. Install dependencies from `requirements.txt`.
 2. Create a `.env` file from `.env.example`.
-3. Run the local test script:
+3. Set `YOUTUBE_API_KEY` in `.env`.
+4. Run the local test script:
 
 ```bash
-python scripts/test_reddit_scraper_local.py --event "World Cup" --keywords "morocco,football" --subreddits "soccer,worldcup" --max-posts 20 --max-comments 50 --output-jsonl data/reddit_test.jsonl
+python scripts/test_youtube_api_collector_local.py --event "World Cup" --search-query "morocco football" --channel-ids "" --video-ids "" --max-videos 20 --max-comments 50 --output-jsonl data/youtube_test.jsonl
 ```
 
 Expected output:
 
-- number of posts scanned
+- number of videos scanned
 - number of comments collected
 - 3 sample documents
 - optional JSONL file on disk
@@ -67,31 +68,35 @@ To send the same data to Kafka, pass:
 Example:
 
 ```bash
-python scripts/test_reddit_scraper_local.py --event "World Cup" --keywords "morocco,football" --subreddits "soccer,worldcup" --max-posts 20 --max-comments 50 --send-to-kafka true
+python scripts/test_youtube_api_collector_local.py --event "World Cup" --search-query "morocco football" --max-videos 20 --max-comments 50 --send-to-kafka true
 ```
 
 ## Lambda deployment
 
-Deploy `cloud/lambda_reddit_to_kafka.py` as the Lambda handler.
+Deploy `cloud/lambda_youtube_to_kafka.py` as the Lambda handler.
 
 The Lambda expects the same payload fields used by the dashboard:
 
 - `event_name`
-- `keywords`
-- `subreddits`
-- `max_posts`
-- `max_comments_per_post`
-- `sort_mode`
-- `time_filter`
+- `search_query`
+- `video_ids`
+- `channel_ids`
+- `max_videos`
+- `max_comments_per_video`
+- `order`
+- `region_code`
+- `relevance_language`
+- `published_after`
+- `published_before`
 - `engine`
 
-The dashboard can save the active Lambda collector settings to S3 so scheduled EventBridge runs can reuse the latest event/keyword/subreddit limits.
+The dashboard can save the active Lambda collector settings to S3 so scheduled EventBridge runs can reuse the latest query/video/channel limits.
 
 ## Limitations
 
-- The current scraper uses public Reddit pages and JSON endpoints, so page structure changes can affect it.
-- Respectful delays are enabled to reduce the chance of blocking.
-- Selenium or Playwright can be added later if Reddit changes its HTML/JSON behavior, but they are intentionally not required for the current Lambda-friendly build.
+- The collector depends on the YouTube Data API and a valid API key with remaining quota.
+- Respectful delays are enabled to reduce burst traffic.
+- If the API quota is exhausted, Lambda will fail until quota is restored or the request volume is reduced.
 
 ## Local Kafka note
 
@@ -106,5 +111,5 @@ If a client still receives `kafka:9092`, recreate the Docker stack so the broker
 ## Spark and Elasticsearch
 
 - Spark continues reading from `raw_social_posts`.
-- Spark accepts Reddit messages with `source="reddit"`.
+- Spark accepts YouTube messages with `source="youtube"`.
 - Elasticsearch stores processed sentiment documents and powers the live Streamlit chart.

@@ -22,32 +22,52 @@ ELASTICSEARCH_BATCH_SIZE = int(os.getenv("ELASTICSEARCH_BATCH_SIZE", "100"))
 
 AWS_REGION = os.getenv("AWS_REGION", "eu-north-1")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "")
-S3_PREFIX = os.getenv("S3_PREFIX", "raw/reddit")
+S3_PREFIX = os.getenv("S3_PREFIX", "raw/youtube")
 ENABLE_S3_BACKUP = os.getenv("ENABLE_S3_BACKUP", "true").strip().lower() == "true"
 COLLECTOR_CONFIG_BUCKET_NAME = os.getenv("COLLECTOR_CONFIG_BUCKET_NAME", S3_BUCKET_NAME)
-COLLECTOR_CONFIG_S3_KEY = os.getenv("COLLECTOR_CONFIG_S3_KEY", "config/reddit_collector_runtime.json")
+COLLECTOR_CONFIG_S3_KEY = os.getenv("COLLECTOR_CONFIG_S3_KEY", "config/youtube_collector_runtime.json")
 
-COLLECTOR_SOURCE = os.getenv("COLLECTOR_SOURCE", "reddit")
+COLLECTOR_SOURCE = os.getenv("COLLECTOR_SOURCE", "youtube")
 COLLECTOR_MODE = os.getenv("COLLECTOR_MODE", "local").strip().lower()
-COLLECTOR_LAMBDA_FUNCTION_NAME = os.getenv("COLLECTOR_LAMBDA_FUNCTION_NAME", "reddit-collector-to-kafka")
+COLLECTOR_LAMBDA_FUNCTION_NAME = os.getenv("COLLECTOR_LAMBDA_FUNCTION_NAME", "youtube-collector-to-kafka")
 COLLECTOR_LAMBDA_REGION = os.getenv("COLLECTOR_LAMBDA_REGION", AWS_REGION)
 
 DEFAULT_EVENT_NAME = os.getenv("DEFAULT_EVENT_NAME", "Morocco football")
-DEFAULT_REDDIT_KEYWORDS = os.getenv("DEFAULT_REDDIT_KEYWORDS", "morocco football,Morocco match,CAN Morocco")
-DEFAULT_REDDIT_SUBREDDITS = os.getenv("DEFAULT_REDDIT_SUBREDDITS", "soccer,worldcup")
-DEFAULT_REDDIT_SORT_MODE = os.getenv("DEFAULT_REDDIT_SORT_MODE", "relevance")
-DEFAULT_REDDIT_TIME_FILTER = os.getenv("DEFAULT_REDDIT_TIME_FILTER", "")
-REDDIT_SCRAPER_ENGINE = os.getenv("REDDIT_SCRAPER_ENGINE", "requests").strip().lower()
-REDDIT_MAX_POSTS = int(os.getenv("REDDIT_MAX_POSTS", "20"))
-REDDIT_MAX_COMMENTS_PER_POST = int(os.getenv("REDDIT_MAX_COMMENTS_PER_POST", "50"))
-REDDIT_REQUEST_DELAY_SECONDS = float(os.getenv("REDDIT_REQUEST_DELAY_SECONDS", "2"))
-REDDIT_TIMEOUT_SECONDS = float(os.getenv("REDDIT_TIMEOUT_SECONDS", "15"))
-REDDIT_HEADLESS = os.getenv("REDDIT_HEADLESS", "true").strip().lower() == "true"
-REDDIT_USER_AGENT = os.getenv(
-    "REDDIT_USER_AGENT",
+DEFAULT_YOUTUBE_SEARCH_QUERIES = os.getenv(
+    "DEFAULT_YOUTUBE_SEARCH_QUERIES",
+    "morocco football,Morocco match,CAN Morocco",
+)
+DEFAULT_YOUTUBE_VIDEO_IDS = os.getenv("DEFAULT_YOUTUBE_VIDEO_IDS", "")
+DEFAULT_YOUTUBE_CHANNEL_IDS = os.getenv("DEFAULT_YOUTUBE_CHANNEL_IDS", "")
+DEFAULT_YOUTUBE_ORDER = os.getenv("DEFAULT_YOUTUBE_ORDER", "relevance")
+DEFAULT_YOUTUBE_REGION_CODE = os.getenv("DEFAULT_YOUTUBE_REGION_CODE", "")
+DEFAULT_YOUTUBE_RELEVANCE_LANGUAGE = os.getenv("DEFAULT_YOUTUBE_RELEVANCE_LANGUAGE", "en")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+YOUTUBE_API_BASE_URL = os.getenv("YOUTUBE_API_BASE_URL", "https://www.googleapis.com/youtube/v3")
+YOUTUBE_MAX_VIDEOS = int(os.getenv("YOUTUBE_MAX_VIDEOS", "20"))
+YOUTUBE_MAX_COMMENTS_PER_VIDEO = int(os.getenv("YOUTUBE_MAX_COMMENTS_PER_VIDEO", "50"))
+YOUTUBE_REQUEST_DELAY_SECONDS = float(os.getenv("YOUTUBE_REQUEST_DELAY_SECONDS", "0.25"))
+YOUTUBE_API_TIMEOUT_SECONDS = float(os.getenv("YOUTUBE_API_TIMEOUT_SECONDS", "20"))
+YOUTUBE_USER_AGENT = os.getenv(
+    "YOUTUBE_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 )
+YOUTUBE_PUBLISHED_AFTER = os.getenv("YOUTUBE_PUBLISHED_AFTER", "")
+YOUTUBE_PUBLISHED_BEFORE = os.getenv("YOUTUBE_PUBLISHED_BEFORE", "")
+
+# Legacy aliases kept for backward compatibility with older imports.
+DEFAULT_REDDIT_KEYWORDS = DEFAULT_YOUTUBE_SEARCH_QUERIES
+DEFAULT_REDDIT_SUBREDDITS = DEFAULT_YOUTUBE_CHANNEL_IDS
+DEFAULT_REDDIT_SORT_MODE = DEFAULT_YOUTUBE_ORDER
+DEFAULT_REDDIT_TIME_FILTER = ""
+REDDIT_SCRAPER_ENGINE = os.getenv("REDDIT_SCRAPER_ENGINE", "youtube_api").strip().lower()
+REDDIT_MAX_POSTS = YOUTUBE_MAX_VIDEOS
+REDDIT_MAX_COMMENTS_PER_POST = YOUTUBE_MAX_COMMENTS_PER_VIDEO
+REDDIT_REQUEST_DELAY_SECONDS = YOUTUBE_REQUEST_DELAY_SECONDS
+REDDIT_TIMEOUT_SECONDS = YOUTUBE_API_TIMEOUT_SECONDS
+REDDIT_HEADLESS = False
+REDDIT_USER_AGENT = YOUTUBE_USER_AGENT
 
 MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "huggingface")
 MODEL_NAME = os.getenv("MODEL_NAME", "cardiffnlp/twitter-xlm-roberta-base-sentiment")
@@ -82,6 +102,23 @@ class Settings:
     collector_lambda_region: str = COLLECTOR_LAMBDA_REGION
 
     default_event_name: str = DEFAULT_EVENT_NAME
+    default_youtube_search_queries: str = DEFAULT_YOUTUBE_SEARCH_QUERIES
+    default_youtube_video_ids: str = DEFAULT_YOUTUBE_VIDEO_IDS
+    default_youtube_channel_ids: str = DEFAULT_YOUTUBE_CHANNEL_IDS
+    default_youtube_order: str = DEFAULT_YOUTUBE_ORDER
+    default_youtube_region_code: str = DEFAULT_YOUTUBE_REGION_CODE
+    default_youtube_relevance_language: str = DEFAULT_YOUTUBE_RELEVANCE_LANGUAGE
+    youtube_api_key: str = YOUTUBE_API_KEY
+    youtube_api_base_url: str = YOUTUBE_API_BASE_URL
+    youtube_max_videos: int = YOUTUBE_MAX_VIDEOS
+    youtube_max_comments_per_video: int = YOUTUBE_MAX_COMMENTS_PER_VIDEO
+    youtube_request_delay_seconds: float = YOUTUBE_REQUEST_DELAY_SECONDS
+    youtube_api_timeout_seconds: float = YOUTUBE_API_TIMEOUT_SECONDS
+    youtube_user_agent: str = YOUTUBE_USER_AGENT
+    youtube_published_after: str = YOUTUBE_PUBLISHED_AFTER
+    youtube_published_before: str = YOUTUBE_PUBLISHED_BEFORE
+
+    # Legacy aliases retained so older code paths still import cleanly.
     default_reddit_keywords: str = DEFAULT_REDDIT_KEYWORDS
     default_reddit_subreddits: str = DEFAULT_REDDIT_SUBREDDITS
     default_reddit_sort_mode: str = DEFAULT_REDDIT_SORT_MODE
