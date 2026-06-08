@@ -17,6 +17,7 @@ The active collector now uses the YouTube Data API. Streamlit can run the collec
 - Use EC2 for Kafka, Spark, the fine-tuned BERT runtime, Elasticsearch, and Streamlit.
 - Do not hardcode AWS credentials in code.
 - Lambda must be able to reach Kafka over the network.
+- Lambda also needs outbound internet access to reach the YouTube Data API.
 - Lambda may optionally write a backup JSONL file to S3.
 - The raw Kafka topic must remain `raw_social_posts`.
 - Respectful API pacing must remain enabled.
@@ -33,15 +34,9 @@ Only the files below are part of the current workflow.
   - Normalizes documents into Kafka-ready JSON.
   - Supports local mode and Lambda mode.
 
-- `cloud/reddit_scraper_collector.py`
-  - Compatibility wrapper that re-exports the YouTube collector for older import paths.
-
 - `cloud/lambda_youtube_to_kafka.py`
   - AWS Lambda handler for the YouTube collector.
   - Collects comments, publishes them to Kafka, and optionally uploads a JSONL backup to S3.
-
-- `cloud/lambda_reddit_to_kafka.py`
-  - Compatibility wrapper that forwards to the YouTube Lambda handler.
 
 - `cloud/kafka_client.py`
   - Reusable Kafka producer helper for Lambda and cloud-side code.
@@ -155,7 +150,7 @@ Only the files below are part of the current workflow.
   - Example environment variables for local development and deployment.
 
 - `scripts/test_youtube_api_collector_local.py`
-  - Legacy filename, now used as the local YouTube API collector test script.
+  - Local YouTube API collector test script.
 
 ## 4. What Was Removed From the Main Workflow
 
@@ -183,6 +178,10 @@ When helping with AWS setup, assume this target architecture:
    - Publishes normalized comments directly to Kafka.
    - Optionally writes a backup JSONL file to S3.
    - Reads the latest saved collector parameters from S3 when invoked without an explicit payload, which allows EventBridge scheduled runs to reuse the settings chosen in Streamlit.
+   - For production, Lambda should run in the same VPC as Kafka or reach Kafka through a private network path.
+   - If Lambda is placed in private subnets, it needs a NAT Gateway or equivalent outbound path so it can call the YouTube Data API.
+   - The Kafka security group must allow inbound traffic from the Lambda security group on the broker port.
+   - Kafka must advertise an address that Lambda can resolve and reach; `localhost` will not work from Lambda.
 
 2. `Kafka on EC2`
    - Kafka broker runs on an EC2 instance or EC2-based cluster.
@@ -233,6 +232,7 @@ When configuring AWS and EC2, these are the most important values:
 - `S3_PREFIX`
 - `ENABLE_S3_BACKUP`
 - `YOUTUBE_API_KEY`
+- `YOUTUBE_API_BASE_URL`
 - `YOUTUBE_MAX_VIDEOS`
 - `YOUTUBE_MAX_COMMENTS_PER_VIDEO`
 - `YOUTUBE_REQUEST_DELAY_SECONDS`
@@ -240,6 +240,8 @@ When configuring AWS and EC2, these are the most important values:
 - `YOUTUBE_USER_AGENT`
 - `YOUTUBE_PUBLISHED_AFTER`
 - `YOUTUBE_PUBLISHED_BEFORE`
+- `COLLECTOR_CONFIG_BUCKET_NAME`
+- `COLLECTOR_CONFIG_S3_KEY`
 
 ## 7. How the Streamlit Dashboard Works
 
@@ -260,6 +262,7 @@ When configuring AWS and EC2, these are the most important values:
   - a Lambda settings save flow for query/video/channel limit changes
 - If `COLLECTOR_MODE=local`, the dashboard runs the local YouTube collector directly.
 - If `COLLECTOR_MODE=lambda`, the dashboard saves the chosen collector settings to S3 and can also trigger the Lambda collector with `boto3` for an immediate run.
+- When `COLLECTOR_MODE=lambda`, the saved S3 config is also what EventBridge scheduled invocations reuse.
 - The dashboard displays:
   - status
   - session id
@@ -297,6 +300,9 @@ If asked how to deploy this project on AWS, focus on:
 - S3 backup bucket and `s3:PutObject` permissions
 - S3 collector-config bucket and `s3:GetObject` / `s3:PutObject` permissions for Streamlit and Lambda
 - Kafka broker endpoint configuration in `KAFKA_BOOTSTRAP_SERVERS`
+- Lambda VPC/subnet configuration and NAT access for YouTube API calls
+- Kafka security group rules for Lambda-to-EC2 connectivity
+- Kafka advertised listener configuration for private EC2 access
 - Spark reading from Kafka topic `raw_social_posts`
 - Nginx reverse proxy in front of Streamlit for production deployment on EC2
 

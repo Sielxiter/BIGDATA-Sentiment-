@@ -138,7 +138,3 @@ def invoke_youtube_collector_lambda(
         )
 
     return {"request_payload": payload, "raw_response": response, "decoded": decoded}
-
-
-# Backward-compatible alias for older code paths.
-invoke_reddit_collector_lambda = invoke_youtube_collector_lambda

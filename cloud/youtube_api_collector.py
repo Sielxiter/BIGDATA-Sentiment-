@@ -809,8 +809,3 @@ def run_youtube_collection(
     if include_documents:
         result["documents"] = documents
     return result
-
-
-# Backward-compatible aliases for legacy imports.
-RedditScraperCollector = YouTubeAPICollector
-run_reddit_collection = run_youtube_collection
