@@ -39,6 +39,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-filter", default="", help="Reddit time filter such as day, week, month, year.")
     parser.add_argument("--headless", type=_bool_arg, default=True, help="Run the browser headlessly.")
     parser.add_argument(
+        "--batch-comment-limit",
+        type=int,
+        default=200,
+        help="Publish a Kafka batch after this many new comments are buffered.",
+    )
+    parser.add_argument(
+        "--batch-sleep-seconds",
+        type=float,
+        default=100.0,
+        help="Sleep between continuous collection cycles.",
+    )
+    parser.add_argument(
+        "--continuous",
+        type=_bool_arg,
+        default=True,
+        help="Keep collecting until the script is stopped manually.",
+    )
+    parser.add_argument(
         "--use-chrome-profile",
         type=_bool_arg,
         default=False,
@@ -84,6 +102,9 @@ def main() -> None:
         max_comments_per_post=args.max_comments,
         sort_mode=args.sort,
         time_filter=args.time_filter,
+        batch_comment_limit=args.batch_comment_limit,
+        batch_sleep_seconds=args.batch_sleep_seconds,
+        continuous=args.continuous,
         headless=args.headless,
         use_chrome_profile=args.use_chrome_profile,
         chrome_user_data_dir=args.chrome_user_data_dir or None,

@@ -251,6 +251,10 @@ def load_saved_collector_config() -> tuple[dict[str, str], str | None]:
             or settings.default_youtube_search_queries
         ).strip(),
     }
+    if error:
+        lowered_error = error.lower()
+        if "accessdenied" in lowered_error or "access denied" in lowered_error or "403" in lowered_error:
+            return normalized, None
     return normalized, error
 
 
@@ -566,9 +570,8 @@ def main() -> None:
         st.caption("Disable while typing if the page refreshes too often.")
 
     saved_runtime_config, config_error = load_saved_collector_config()
-    if "collector_runtime_config" not in st.session_state:
-        st.session_state["collector_runtime_config"] = saved_runtime_config
-    runtime_config = st.session_state["collector_runtime_config"]
+    st.session_state["collector_runtime_config"] = saved_runtime_config
+    runtime_config = saved_runtime_config
 
     st.markdown(
         f"""
@@ -617,8 +620,7 @@ def main() -> None:
             if st.button("Edit settings", width="stretch"):
                 render_config_dialog(runtime_config)
         with button_right:
-            collect_label = "Run Lambda now" if COLLECTOR_MODE == "lambda" else "Collect now"
-            collect_now = st.button(collect_label, width="stretch")
+            collect_now = st.button("Collect now", width="stretch")
 
     if collect_now:
         with st.spinner("Running collection..."):
