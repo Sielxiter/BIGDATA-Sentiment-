@@ -15,6 +15,8 @@ from typing import Iterable
 from urllib.parse import quote_plus
 import hashlib
 import json
+import shutil
+import tempfile
 import time
 
 from bs4 import BeautifulSoup
@@ -33,6 +35,7 @@ from config.settings import KAFKA_BOOTSTRAP_SERVERS, KAFKA_RAW_TOPIC, settings
 
 
 DEFAULT_LOCAL_BACKUP_DIR = Path("raw") / "youtube"
+DEFAULT_DEBUG_DIR = Path("raw") / "youtube" / "debug"
 
 
 @dataclass(slots=True)
@@ -47,7 +50,11 @@ class RedditSeleniumConfig:
     request_delay_seconds: float = 2.0
     headless: bool = True
     page_load_timeout_seconds: int = 30
+    use_chrome_profile: bool = False
+    chrome_user_data_dir: str = ""
+    chrome_profile_directory: str = "Default"
     local_backup_dir: Path = DEFAULT_LOCAL_BACKUP_DIR
+    debug_dir: Path = DEFAULT_DEBUG_DIR
     kafka_bootstrap_servers: str = KAFKA_BOOTSTRAP_SERVERS
     kafka_topic: str = KAFKA_RAW_TOPIC
 
@@ -90,25 +97,77 @@ def _default_runtime_config() -> dict[str, str]:
     }
 
 
-def _build_driver(*, headless: bool = True, page_load_timeout_seconds: int = 30) -> webdriver.Chrome:
+def _prepare_temp_chrome_profile(user_data_dir: str, profile_directory: str) -> tuple[str, str, str]:
+    source_root = Path(user_data_dir).expanduser()
+    if not source_root.exists():
+        raise FileNotFoundError(f"Chrome user data directory not found: {source_root}")
+
+    source_profile_dir = source_root / profile_directory
+    if not source_profile_dir.exists():
+        raise FileNotFoundError(
+            f"Chrome profile directory not found: {source_profile_dir}"
+        )
+
+    temp_root = Path(tempfile.mkdtemp(prefix="reddit-selenium-profile-"))
+    cloned_user_data_dir = temp_root / "user-data"
+    cloned_user_data_dir.mkdir(parents=True, exist_ok=True)
+
+    local_state = source_root / "Local State"
+    if local_state.exists():
+        shutil.copy2(local_state, cloned_user_data_dir / "Local State")
+
+    target_profile_dir = cloned_user_data_dir / profile_directory
+    shutil.copytree(source_profile_dir, target_profile_dir, dirs_exist_ok=True)
+    return str(cloned_user_data_dir), profile_directory, str(temp_root)
+
+
+def _build_driver(
+    *,
+    headless: bool = True,
+    page_load_timeout_seconds: int = 30,
+    use_chrome_profile: bool = False,
+    chrome_user_data_dir: str = "",
+    chrome_profile_directory: str = "Default",
+) -> tuple[webdriver.Chrome, str | None]:
     options = Options()
     if headless:
         options.add_argument("--headless=new")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
+    options.add_argument("--remote-debugging-port=0")
+    options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--window-size=1600,2200")
     options.add_argument(
         "--user-agent="
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     )
+    temp_profile_root: str | None = None
+    if use_chrome_profile and chrome_user_data_dir.strip():
+        cloned_user_data_dir, cloned_profile_directory, temp_profile_root = _prepare_temp_chrome_profile(
+            chrome_user_data_dir.strip(),
+            chrome_profile_directory.strip() or "Default",
+        )
+        options.add_argument(f"--user-data-dir={cloned_user_data_dir}")
+        options.add_argument(f"--profile-directory={cloned_profile_directory}")
     driver = webdriver.Chrome(options=options)
     driver.set_page_load_timeout(page_load_timeout_seconds)
-    return driver
+    return driver, temp_profile_root
 
 
 def _wait_for_page(driver: webdriver.Chrome) -> None:
     WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+
+
+def _is_reddit_blocked(page_source: str) -> bool:
+    text = (page_source or "").lower()
+    return (
+        "whoa there, pardner" in text
+        or "your request has been blocked" in text
+        or "<title>blocked</title>" in text
+        or "network policy" in text
+        or "blocked by network security" in text
+    )
 
 
 def _search_url(keyword: str, subreddit: str | None, sort_mode: str, time_filter: str) -> str:
@@ -129,10 +188,13 @@ def _extract_post_candidates(page_source: str) -> list[dict]:
     posts: list[dict] = []
     seen_ids: set[str] = set()
 
-    for thing in soup.select("div.thing[data-fullname][data-url]"):
-        post_id = (thing.get("data-fullname") or "").strip()
-        title_node = thing.select_one("a.title")
-        if not post_id or title_node is None:
+    candidate_nodes = soup.select(
+        "div.search-result-link, div.thing[data-fullname][data-url], div.thing.link"
+    )
+    for thing in candidate_nodes:
+        post_id = (thing.get("data-fullname") or thing.get("id") or "").strip()
+        title_node = thing.select_one("a.search-title, a.title")
+        if title_node is None:
             continue
 
         post_url = (title_node.get("href") or "").strip()
@@ -142,16 +204,20 @@ def _extract_post_candidates(page_source: str) -> list[dict]:
             post_url = f"https://old.reddit.com{post_url}"
 
         comments_link = ""
-        comments_anchor = thing.select_one("a.comments")
+        comments_anchor = thing.select_one("a.search-comments, a.comments")
         if comments_anchor and comments_anchor.get("href"):
             comments_link = comments_anchor.get("href", "").strip()
             if comments_link.startswith("/"):
                 comments_link = f"https://old.reddit.com{comments_link}"
 
-        subreddit = ""
-        subreddit_node = thing.select_one("a.subreddit")
-        if subreddit_node:
-            subreddit = subreddit_node.get_text(" ", strip=True).removeprefix("r/")
+        subreddit_node = thing.select_one(
+            "a.search-subreddit-link, a.subreddit, span.search-subreddit-link a"
+        )
+        subreddit = subreddit_node.get_text(" ", strip=True).removeprefix("r/") if subreddit_node else ""
+
+        if not post_id:
+            raw_key = f"{title_node.get_text(' ', strip=True)}::{post_url}"
+            post_id = "reddit_post_" + hashlib.md5(raw_key.encode("utf-8")).hexdigest()
 
         if post_id in seen_ids:
             continue
@@ -278,6 +344,15 @@ def _write_local_jsonl(records: list[dict], output_path: Path) -> None:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _write_debug_snapshot(*, debug_dir: Path, keyword: str, subreddit: str | None, page_source: str) -> str:
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    subreddit_slug = _slugify(subreddit or "all")
+    keyword_slug = _slugify(keyword)
+    output_path = debug_dir / f"reddit_search_{subreddit_slug}_{keyword_slug}.html"
+    output_path.write_text(page_source or "", encoding="utf-8")
+    return str(output_path)
+
+
 def _detect_language(text: str) -> str | None:
     candidate = (text or "").strip()
     if len(candidate) < 20:
@@ -299,6 +374,9 @@ def run_reddit_selenium_collection(
     time_filter: str = "",
     request_delay_seconds: float = 2.0,
     headless: bool = True,
+    use_chrome_profile: bool | None = None,
+    chrome_user_data_dir: str | None = None,
+    chrome_profile_directory: str | None = None,
     send_to_kafka: bool = False,
     kafka_bootstrap_servers: str | None = None,
     kafka_topic: str | None = None,
@@ -391,18 +469,38 @@ def run_reddit_selenium_collection(
         time_filter=resolved_time_filter,
         request_delay_seconds=request_delay_seconds,
         headless=headless,
+        use_chrome_profile=settings.reddit_use_chrome_profile if use_chrome_profile is None else use_chrome_profile,
+        chrome_user_data_dir=(chrome_user_data_dir or settings.reddit_chrome_user_data_dir).strip(),
+        chrome_profile_directory=(chrome_profile_directory or settings.reddit_chrome_profile_directory).strip() or "Default",
         kafka_bootstrap_servers=(kafka_bootstrap_servers or KAFKA_BOOTSTRAP_SERVERS).strip(),
         kafka_topic=(kafka_topic or KAFKA_RAW_TOPIC).strip() or KAFKA_RAW_TOPIC,
     )
 
+    if config.use_chrome_profile and not config.chrome_user_data_dir:
+        raise ValueError("Chrome profile mode requires a Chrome user data directory.")
+
+    if config.use_chrome_profile and config.headless:
+        warnings_headless = "Chrome profile mode does not support headless reliably; forcing headless=False."
+    else:
+        warnings_headless = None
+
     session_id = hashlib.md5(f"{config.event_name}-{_now_iso()}".encode("utf-8")).hexdigest()
     warnings: list[str] = [config_warning] if config_warning else []
+    if warnings_headless:
+        warnings.append(warnings_headless)
     documents: list[dict] = []
     posts_scanned = 0
 
     driver: webdriver.Chrome | None = None
+    temp_profile_root: str | None = None
     try:
-        driver = _build_driver(headless=config.headless, page_load_timeout_seconds=config.page_load_timeout_seconds)
+        driver, temp_profile_root = _build_driver(
+            headless=False if config.use_chrome_profile else config.headless,
+            page_load_timeout_seconds=config.page_load_timeout_seconds,
+            use_chrome_profile=config.use_chrome_profile,
+            chrome_user_data_dir=config.chrome_user_data_dir,
+            chrome_profile_directory=config.chrome_profile_directory,
+        )
         targets = config.subreddits or [None]
 
         for keyword in config.keywords:
@@ -416,9 +514,37 @@ def run_reddit_selenium_collection(
                     warnings.append(f"Search failed for keyword='{keyword}', subreddit='{subreddit}': {exc}")
                     continue
 
-                posts = _extract_post_candidates(driver.page_source)[: config.max_posts]
+                page_source = driver.page_source
+                if _is_reddit_blocked(page_source):
+                    debug_path = _write_debug_snapshot(
+                        debug_dir=config.debug_dir,
+                        keyword=keyword,
+                        subreddit=subreddit,
+                        page_source=page_source,
+                    )
+                    warnings.append(
+                        "Reddit blocked the search page with a network policy response. "
+                        f"This scraper will not collect posts from this IP/browser session. Debug HTML: {debug_path}"
+                    )
+                    break
+
+                posts = _extract_post_candidates(page_source)[: config.max_posts]
                 if not posts:
-                    warnings.append(f"No posts found for keyword='{keyword}', subreddit='{subreddit}'")
+                    page_title = ""
+                    try:
+                        page_title = driver.title.strip()
+                    except Exception:
+                        page_title = ""
+                    debug_path = _write_debug_snapshot(
+                        debug_dir=config.debug_dir,
+                        keyword=keyword,
+                        subreddit=subreddit,
+                        page_source=page_source,
+                    )
+                    warnings.append(
+                        f"No posts found for keyword='{keyword}', subreddit='{subreddit}', "
+                        f"url='{url}', title='{page_title}', debug_html='{debug_path}'"
+                    )
                     continue
 
                 for post in posts:
@@ -490,3 +616,5 @@ def run_reddit_selenium_collection(
     finally:
         if driver is not None:
             driver.quit()
+        if temp_profile_root:
+            shutil.rmtree(temp_profile_root, ignore_errors=True)

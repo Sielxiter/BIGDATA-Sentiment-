@@ -39,6 +39,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-filter", default="", help="Reddit time filter such as day, week, month, year.")
     parser.add_argument("--headless", type=_bool_arg, default=True, help="Run the browser headlessly.")
     parser.add_argument(
+        "--use-chrome-profile",
+        type=_bool_arg,
+        default=False,
+        help="Launch Selenium with a real local Chrome profile.",
+    )
+    parser.add_argument(
+        "--chrome-user-data-dir",
+        default="",
+        help="Chrome user data directory, for example C:\\Users\\My-PC\\AppData\\Local\\Google\\Chrome\\User Data",
+    )
+    parser.add_argument(
+        "--chrome-profile-directory",
+        default="Default",
+        help="Chrome profile directory inside the user data dir, for example Default or Profile 1.",
+    )
+    parser.add_argument(
         "--use-s3-config",
         type=_bool_arg,
         default=True,
@@ -69,6 +85,9 @@ def main() -> None:
         sort_mode=args.sort,
         time_filter=args.time_filter,
         headless=args.headless,
+        use_chrome_profile=args.use_chrome_profile,
+        chrome_user_data_dir=args.chrome_user_data_dir or None,
+        chrome_profile_directory=args.chrome_profile_directory or None,
         send_to_kafka=args.send_to_kafka,
         output_jsonl_path=args.output_jsonl or None,
         use_s3_runtime_config=args.use_s3_config,

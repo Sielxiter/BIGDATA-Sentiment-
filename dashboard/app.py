@@ -55,7 +55,7 @@ def apply_simple_style() -> None:
             --accent: #1d8cf8;
         }
         .block-container {
-            max-width: 1220px;
+            max-width: 1440px;
             padding-top: 1.2rem;
             padding-bottom: 1.8rem;
         }
@@ -277,14 +277,15 @@ def build_sentiment_bar_chart(counts_df: pd.DataFrame) -> go.Figure:
         ]
     )
     fig.update_layout(
-        title={"text": "Real-Time Sentiment Pulse", "x": 0.02, "xanchor": "left", "font": {"size": 22}},
-        height=460,
-        margin={"l": 28, "r": 12, "t": 78, "b": 55},
+        title={"text": "Real-Time Sentiment Pulse", "x": 0.02, "xanchor": "left", "font": {"size": 24}},
+        height=560,
+        margin={"l": 30, "r": 18, "t": 82, "b": 72},
         plot_bgcolor="#F7FBFF",
         paper_bgcolor="#F7FBFF",
         font={"family": "Trebuchet MS, Segoe UI, sans-serif", "size": 14, "color": "#19324D"},
-        bargap=0.28,
+        bargap=0.22,
         showlegend=False,
+        uniformtext={"minsize": 12, "mode": "hide"},
     )
     fig.update_xaxes(
         title="Sentiment / Emotion",
@@ -295,6 +296,8 @@ def build_sentiment_bar_chart(counts_df: pd.DataFrame) -> go.Figure:
         ticks="outside",
         tickwidth=2,
         tickcolor="#8CB8DE",
+        gridcolor="#E6F0F8",
+        zeroline=False,
     )
     fig.update_yaxes(
         title="Number of comments",
@@ -307,6 +310,16 @@ def build_sentiment_bar_chart(counts_df: pd.DataFrame) -> go.Figure:
         tickcolor="#8CB8DE",
         gridcolor="#DCEAF7",
         zeroline=False,
+    )
+    fig.add_annotation(
+        x=0.01,
+        y=1.14,
+        xref="paper",
+        yref="paper",
+        text="Live Elasticsearch sentiment snapshot",
+        showarrow=False,
+        font={"size": 13, "color": "#5B7083"},
+        align="left",
     )
     return fig
 
@@ -389,15 +402,19 @@ def render_live_sentiment_panel() -> None:
     st.caption("Live sentiment counts from Elasticsearch.")
     st.write(f"Event filter: `{selected_event}`")
 
-    metric_left, metric_right = st.columns(2)
+    metric_left, metric_center, metric_right = st.columns(3)
     metric_left.metric("Processed comments", format_int(total_count))
-    metric_right.metric("Labels visible", format_int(len(counts_df)))
+    metric_center.metric("Labels visible", format_int(len(counts_df)))
+    if counts_df.empty:
+        metric_right.metric("Top label", "No data")
+    else:
+        metric_right.metric("Top label", str(counts_df.iloc[0]["label"]))
 
     if error:
         st.warning(f"Live chart is waiting for Elasticsearch data: {error}")
 
     fig = build_sentiment_bar_chart(counts_df)
-    st.plotly_chart(fig, width="stretch", key="live_sentiment_distribution_bar")
+    st.plotly_chart(fig, width="stretch", use_container_width=True, key="live_sentiment_distribution_bar")
 
     if counts_df.empty:
         st.info("No processed comments yet. Collect data, then run Kafka, Spark, BERT, and Elasticsearch.")
@@ -634,17 +651,17 @@ def main() -> None:
 
     render_last_response()
 
-    top_left, top_right = st.columns([1.08, 0.92])
-    with top_left:
-        with st.container(border=False):
-            st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-            render_live_sentiment_panel()
-            st.markdown("</div>", unsafe_allow_html=True)
-    with top_right:
-        with st.container(border=False):
-            st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-            render_recent_comments_panel()
-            st.markdown("</div>", unsafe_allow_html=True)
+    with st.container(border=False):
+        st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+        render_live_sentiment_panel()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div style='height: 0.7rem;'></div>", unsafe_allow_html=True)
+
+    with st.container(border=False):
+        st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+        render_recent_comments_panel()
+        st.markdown("</div>", unsafe_allow_html=True)
 
     if auto_refresh:
         time.sleep(int(refresh_seconds))

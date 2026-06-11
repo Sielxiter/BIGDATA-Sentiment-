@@ -71,6 +71,9 @@ REDDIT_REQUEST_DELAY_SECONDS = YOUTUBE_REQUEST_DELAY_SECONDS
 REDDIT_TIMEOUT_SECONDS = YOUTUBE_API_TIMEOUT_SECONDS
 REDDIT_HEADLESS = False
 REDDIT_USER_AGENT = YOUTUBE_USER_AGENT
+REDDIT_CHROME_USER_DATA_DIR = os.getenv("REDDIT_CHROME_USER_DATA_DIR", "").strip()
+REDDIT_CHROME_PROFILE_DIRECTORY = os.getenv("REDDIT_CHROME_PROFILE_DIRECTORY", "Default").strip()
+REDDIT_USE_CHROME_PROFILE = os.getenv("REDDIT_USE_CHROME_PROFILE", "false").strip().lower() == "true"
 
 MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "huggingface")
 MODEL_NAME = os.getenv("MODEL_NAME", "cardiffnlp/twitter-xlm-roberta-base-sentiment")
@@ -136,6 +139,9 @@ class Settings:
     reddit_timeout_seconds: float = REDDIT_TIMEOUT_SECONDS
     reddit_headless: bool = REDDIT_HEADLESS
     reddit_user_agent: str = REDDIT_USER_AGENT
+    reddit_chrome_user_data_dir: str = REDDIT_CHROME_USER_DATA_DIR
+    reddit_chrome_profile_directory: str = REDDIT_CHROME_PROFILE_DIRECTORY
+    reddit_use_chrome_profile: bool = REDDIT_USE_CHROME_PROFILE
 
     model_provider: str = MODEL_PROVIDER
     model_name: str = MODEL_NAME
