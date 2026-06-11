@@ -26,6 +26,9 @@ S3_PREFIX = os.getenv("S3_PREFIX", "raw/youtube")
 ENABLE_S3_BACKUP = os.getenv("ENABLE_S3_BACKUP", "true").strip().lower() == "true"
 COLLECTOR_CONFIG_BUCKET_NAME = os.getenv("COLLECTOR_CONFIG_BUCKET_NAME", S3_BUCKET_NAME)
 COLLECTOR_CONFIG_S3_KEY = os.getenv("COLLECTOR_CONFIG_S3_KEY", "config/youtube_collector_runtime.json")
+COLLECTOR_STATE_BUCKET_NAME = os.getenv("COLLECTOR_STATE_BUCKET_NAME", COLLECTOR_CONFIG_BUCKET_NAME)
+COLLECTOR_STATE_S3_KEY = os.getenv("COLLECTOR_STATE_S3_KEY", "state/youtube_collector_state.json")
+COLLECTOR_STATE_MAX_COMMENT_IDS = int(os.getenv("COLLECTOR_STATE_MAX_COMMENT_IDS", "5000"))
 
 COLLECTOR_SOURCE = os.getenv("COLLECTOR_SOURCE", "youtube")
 COLLECTOR_MODE = os.getenv("COLLECTOR_MODE", "local").strip().lower()
@@ -96,6 +99,9 @@ class Settings:
     enable_s3_backup: bool = ENABLE_S3_BACKUP
     collector_config_bucket_name: str = COLLECTOR_CONFIG_BUCKET_NAME
     collector_config_s3_key: str = COLLECTOR_CONFIG_S3_KEY
+    collector_state_bucket_name: str = COLLECTOR_STATE_BUCKET_NAME
+    collector_state_s3_key: str = COLLECTOR_STATE_S3_KEY
+    collector_state_max_comment_ids: int = COLLECTOR_STATE_MAX_COMMENT_IDS
     collector_source: str = COLLECTOR_SOURCE
     collector_mode: str = COLLECTOR_MODE
     collector_lambda_function_name: str = COLLECTOR_LAMBDA_FUNCTION_NAME

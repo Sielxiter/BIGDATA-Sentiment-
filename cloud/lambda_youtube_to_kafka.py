@@ -99,6 +99,7 @@ def lambda_handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]
             "messages_published": result.get("messages_published", 0),
             "kafka_topic": result.get("kafka_topic", settings.kafka_raw_topic),
             "s3_backup_key": result.get("s3_backup_key"),
+            "collector_state_key": result.get("collector_state_key"),
             "errors": error_list,
         }
         if warnings:

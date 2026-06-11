@@ -49,6 +49,9 @@ Only the files below are part of the current workflow.
 - `cloud/collector_config.py`
   - Helper for saving and loading the active collector configuration from S3.
 
+- `cloud/collector_state.py`
+  - Helper for saving and loading the per-event dedup state for already-ingested YouTube comment IDs.
+
 - `cloud/__init__.py`
   - Marks `cloud/` as a Python package.
 
@@ -242,6 +245,9 @@ When configuring AWS and EC2, these are the most important values:
 - `YOUTUBE_PUBLISHED_BEFORE`
 - `COLLECTOR_CONFIG_BUCKET_NAME`
 - `COLLECTOR_CONFIG_S3_KEY`
+- `COLLECTOR_STATE_BUCKET_NAME`
+- `COLLECTOR_STATE_S3_KEY`
+- `COLLECTOR_STATE_MAX_COMMENT_IDS`
 
 ## 7. How the Streamlit Dashboard Works
 
@@ -263,6 +269,7 @@ When configuring AWS and EC2, these are the most important values:
 - If `COLLECTOR_MODE=local`, the dashboard runs the local YouTube collector directly.
 - If `COLLECTOR_MODE=lambda`, the dashboard saves the chosen collector settings to S3 and can also trigger the Lambda collector with `boto3` for an immediate run.
 - When `COLLECTOR_MODE=lambda`, the saved S3 config is also what EventBridge scheduled invocations reuse.
+- The collector also persists a per-event dedup state to S3 so repeated runs skip YouTube comments that were already ingested in earlier successful Kafka publishes.
 - The dashboard displays:
   - status
   - session id

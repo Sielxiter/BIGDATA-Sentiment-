@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from cloud.youtube_api_collector import run_youtube_collection  # noqa: E402
-from cloud.collector_config import save_collector_runtime_config  # noqa: E402
+from cloud.collector_config import load_collector_runtime_config, save_collector_runtime_config  # noqa: E402
 from config.settings import settings  # noqa: E402
 from dashboard.aws_lambda import LambdaInvokeError, invoke_youtube_collector_lambda  # noqa: E402
 
@@ -47,21 +47,66 @@ def apply_simple_style() -> None:
     st.markdown(
         """
         <style>
+        :root {
+            --panel-bg: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+            --panel-border: #d9e8f5;
+            --ink: #102233;
+            --muted: #637381;
+            --accent: #1d8cf8;
+        }
         .block-container {
-            max-width: 1180px;
-            padding-top: 1rem;
-            padding-bottom: 1.5rem;
+            max-width: 1220px;
+            padding-top: 1.2rem;
+            padding-bottom: 1.8rem;
         }
         [data-testid="stMetricValue"] {
-            font-size: 1.2rem;
+            font-size: 1.35rem;
         }
         .collector-badge {
             display: inline-block;
-            border: 2px solid #111111;
+            border: 1px solid #bedcff;
             border-radius: 999px;
-            padding: 0.2rem 0.65rem;
-            background: #f7f7f7;
+            padding: 0.35rem 0.8rem;
+            background: #eef7ff;
             font-weight: 700;
+            color: #1d4e89;
+        }
+        .hero-card {
+            background: radial-gradient(circle at top left, #f5fbff 0%, #ffffff 58%, #f8fcff 100%);
+            border: 1px solid var(--panel-border);
+            border-radius: 22px;
+            padding: 1.1rem 1.2rem;
+            box-shadow: 0 12px 28px rgba(17, 24, 39, 0.06);
+        }
+        .hero-title {
+            margin: 0;
+            color: var(--ink);
+            font-size: 1.8rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+        }
+        .hero-subtitle {
+            margin: 0.35rem 0 0 0;
+            color: var(--muted);
+            font-size: 0.98rem;
+        }
+        .config-pill {
+            display: inline-block;
+            margin-top: 0.8rem;
+            margin-right: 0.55rem;
+            padding: 0.42rem 0.7rem;
+            border-radius: 14px;
+            background: #ffffff;
+            border: 1px solid #ddeaf7;
+            color: #27445d;
+            font-size: 0.92rem;
+        }
+        .section-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 22px;
+            padding: 1rem 1rem 0.85rem 1rem;
+            box-shadow: 0 10px 24px rgba(17, 24, 39, 0.05);
         }
         </style>
         """,
@@ -146,6 +191,69 @@ def load_sentiment_counts(limit: int = 12, event_name: str | None = None) -> tup
         return pd.DataFrame(columns=["label", "count"]), 0, str(exc)
 
 
+@st.cache_data(ttl=10, show_spinner=False)
+def load_recent_comments(limit: int = 20, event_name: str | None = None) -> tuple[pd.DataFrame, str | None]:
+    try:
+        client = get_elasticsearch_client()
+        if not client.indices.exists(index=settings.elasticsearch_index):
+            return pd.DataFrame(), "Elasticsearch index does not exist yet."
+
+        query: dict[str, Any] = {"match_all": {}}
+        if event_name and event_name != EVENT_FILTER_ALL:
+            query = {"term": {"event_name": event_name}}
+
+        response = client.search(
+            index=settings.elasticsearch_index,
+            size=limit,
+            query=query,
+            sort=[{"processed_at": {"order": "desc"}}],
+            _source=[
+                "event_name",
+                "original_text",
+                "sentiment",
+                "confidence",
+                "author",
+                "video_title",
+                "processed_at",
+            ],
+        )
+        rows: list[dict[str, Any]] = []
+        for hit in response.get("hits", {}).get("hits", []):
+            source = hit.get("_source", {}) or {}
+            rows.append(
+                {
+                    "Event": source.get("event_name", ""),
+                    "Comment": source.get("original_text", ""),
+                    "Sentiment": source.get("sentiment", ""),
+                    "Confidence": round(float(source.get("confidence", 0.0) or 0.0), 3),
+                    "Author": source.get("author", ""),
+                    "Video title": source.get("video_title", ""),
+                    "Processed at": source.get("processed_at", ""),
+                }
+            )
+        return pd.DataFrame(rows), None
+    except Exception as exc:
+        return pd.DataFrame(), str(exc)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def load_saved_collector_config() -> tuple[dict[str, str], str | None]:
+    config, error = load_collector_runtime_config(
+        bucket=settings.collector_config_bucket_name,
+        key=settings.collector_config_s3_key,
+        region=settings.aws_region,
+    )
+    normalized = {
+        "event_name": str(config.get("event_name") or settings.default_event_name).strip(),
+        "search_query": str(
+            config.get("search_query")
+            or config.get("keywords")
+            or settings.default_youtube_search_queries
+        ).strip(),
+    }
+    return normalized, error
+
+
 def build_sentiment_bar_chart(counts_df: pd.DataFrame) -> go.Figure:
     if counts_df.empty:
         labels = ["No data"]
@@ -169,66 +277,38 @@ def build_sentiment_bar_chart(counts_df: pd.DataFrame) -> go.Figure:
         ]
     )
     fig.update_layout(
-        title={"text": "Live Sentiment Distribution", "x": 0.02, "xanchor": "left"},
-        height=430,
-        margin={"l": 50, "r": 20, "t": 70, "b": 80},
-        plot_bgcolor="#FFFFFF",
-        paper_bgcolor="#FFFFFF",
-        font={"family": "Arial Black, Arial, sans-serif", "size": 14, "color": "#222222"},
-        bargap=0.35,
+        title={"text": "Real-Time Sentiment Pulse", "x": 0.02, "xanchor": "left", "font": {"size": 22}},
+        height=460,
+        margin={"l": 28, "r": 12, "t": 78, "b": 55},
+        plot_bgcolor="#F7FBFF",
+        paper_bgcolor="#F7FBFF",
+        font={"family": "Trebuchet MS, Segoe UI, sans-serif", "size": 14, "color": "#19324D"},
+        bargap=0.28,
         showlegend=False,
     )
     fig.update_xaxes(
         title="Sentiment / Emotion",
         tickangle=0,
         showline=True,
-        linewidth=4,
-        linecolor="#111111",
+        linewidth=2,
+        linecolor="#8CB8DE",
         ticks="outside",
-        tickwidth=3,
-        tickcolor="#111111",
+        tickwidth=2,
+        tickcolor="#8CB8DE",
     )
     fig.update_yaxes(
         title="Number of comments",
         rangemode="tozero",
         showline=True,
-        linewidth=4,
-        linecolor="#111111",
+        linewidth=2,
+        linecolor="#8CB8DE",
         ticks="outside",
-        tickwidth=3,
-        tickcolor="#111111",
-        gridcolor="#E6E6E6",
+        tickwidth=2,
+        tickcolor="#8CB8DE",
+        gridcolor="#DCEAF7",
         zeroline=False,
     )
     return fig
-
-
-def render_target_summary() -> None:
-    st.markdown("### Target")
-    st.write(f"Source: `{COLLECTOR_SOURCE}`")
-    st.write(f"Mode: `{COLLECTOR_MODE}`")
-    if COLLECTOR_MODE == "lambda":
-        st.write(f"Lambda: `{LAMBDA_FUNCTION_NAME}`")
-        st.write(f"Region: `{LAMBDA_REGION}`")
-        if settings.collector_config_bucket_name:
-            st.write(f"Saved collector config: `s3://{settings.collector_config_bucket_name}/{settings.collector_config_s3_key}`")
-    st.write(f"Kafka topic: `{KAFKA_TOPIC}`")
-    if settings.s3_bucket_name:
-        st.write(f"S3 bucket: `{settings.s3_bucket_name}`")
-        st.write(f"S3 prefix: `{settings.s3_prefix}`")
-    st.caption("AWS credentials come from the EC2 instance profile or configured AWS CLI credentials.")
-
-
-def render_flow_summary() -> None:
-    st.markdown("### Flow")
-    if COLLECTOR_MODE == "lambda":
-        flow = "Streamlit -> S3 saved config -> EventBridge / Streamlit invoke -> AWS Lambda -> YouTube Data API -> Kafka -> Spark -> Elasticsearch"
-    else:
-        flow = "Streamlit -> local YouTube API collector -> Kafka -> Spark -> Elasticsearch"
-    st.code(flow, language="text")
-    st.info(
-        "The collector uses the YouTube Data API and requires a valid YOUTUBE_API_KEY."
-    )
 
 
 def _extract_lambda_body(result: dict[str, Any]) -> dict[str, Any]:
@@ -306,9 +386,7 @@ def render_live_sentiment_panel() -> None:
     counts_df, total_count, error = load_sentiment_counts(event_name=selected_event)
 
     st.markdown("### Real-Time Results")
-    st.caption(
-        "This graph refreshes from Elasticsearch, where Spark writes BERT predictions after consuming Kafka."
-    )
+    st.caption("Live sentiment counts from Elasticsearch.")
     st.write(f"Event filter: `{selected_event}`")
 
     metric_left, metric_right = st.columns(2)
@@ -319,7 +397,7 @@ def render_live_sentiment_panel() -> None:
         st.warning(f"Live chart is waiting for Elasticsearch data: {error}")
 
     fig = build_sentiment_bar_chart(counts_df)
-    st.plotly_chart(fig, use_container_width=True, key="live_sentiment_distribution_bar")
+    st.plotly_chart(fig, width="stretch", key="live_sentiment_distribution_bar")
 
     if counts_df.empty:
         st.info("No processed comments yet. Collect data, then run Kafka, Spark, BERT, and Elasticsearch.")
@@ -331,34 +409,51 @@ def render_live_sentiment_panel() -> None:
     st.caption(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
 
 
+def render_recent_comments_panel() -> None:
+    selected_event = st.session_state.get("selected_event_filter", EVENT_FILTER_ALL)
+    comments_df, error = load_recent_comments(event_name=selected_event)
+
+    st.markdown("### Latest Processed Comments")
+    st.caption("Most recent comments already processed by Spark and indexed in Elasticsearch.")
+
+    if error:
+        st.warning(f"Comments table is waiting for Elasticsearch data: {error}")
+        return
+
+    if comments_df.empty:
+        st.info("No processed comments available yet.")
+        return
+
+    st.dataframe(
+        comments_df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Comment": st.column_config.TextColumn(width="large"),
+            "Video title": st.column_config.TextColumn(width="medium"),
+            "Confidence": st.column_config.NumberColumn(format="%.3f"),
+        },
+    )
+
+
 def invoke_local_collection(
     *,
     event_name: str,
     search_query: str,
-    video_ids: str,
-    channel_ids: str,
-    max_videos: int,
-    max_comments_per_video: int,
-    order: str,
-    region_code: str,
-    relevance_language: str,
-    published_after: str,
-    published_before: str,
-    engine: str,
 ) -> dict[str, Any]:
     return run_youtube_collection(
         event_name=event_name,
         search_query=search_query,
-        video_ids=video_ids,
-        channel_ids=channel_ids,
-        max_videos=max_videos,
-        max_comments_per_video=max_comments_per_video,
-        order=order,
-        region_code=region_code or None,
-        relevance_language=relevance_language or None,
-        published_after=published_after or None,
-        published_before=published_before or None,
-        engine=engine,
+        video_ids=settings.default_youtube_video_ids,
+        channel_ids=settings.default_youtube_channel_ids,
+        max_videos=settings.youtube_max_videos,
+        max_comments_per_video=settings.youtube_max_comments_per_video,
+        order=settings.default_youtube_order,
+        region_code=settings.default_youtube_region_code or None,
+        relevance_language=settings.default_youtube_relevance_language or None,
+        published_after=settings.youtube_published_after or None,
+        published_before=settings.youtube_published_before or None,
+        engine="youtube_api",
         publish_to_kafka=True,
         backup_to_s3=settings.enable_s3_backup,
         include_documents=False,
@@ -374,30 +469,20 @@ def invoke_lambda_collection(
     *,
     event_name: str,
     search_query: str,
-    video_ids: str,
-    channel_ids: str,
-    max_videos: int,
-    max_comments_per_video: int,
-    order: str,
-    region_code: str,
-    relevance_language: str,
-    published_after: str,
-    published_before: str,
-    engine: str,
 ) -> dict[str, Any]:
     result = invoke_youtube_collector_lambda(
         event_name=event_name,
         search_query=search_query,
-        video_ids=video_ids,
-        channel_ids=channel_ids,
-        max_videos=max_videos,
-        max_comments_per_video=max_comments_per_video,
-        order=order,
-        region_code=region_code,
-        relevance_language=relevance_language,
-        published_after=published_after,
-        published_before=published_before,
-        engine=engine,
+        video_ids="",
+        channel_ids="",
+        max_videos=settings.youtube_max_videos,
+        max_comments_per_video=settings.youtube_max_comments_per_video,
+        order=settings.default_youtube_order,
+        region_code=settings.default_youtube_region_code,
+        relevance_language=settings.default_youtube_relevance_language,
+        published_after=settings.youtube_published_after,
+        published_before=settings.youtube_published_before,
+        engine="youtube_api",
         function_name=LAMBDA_FUNCTION_NAME,
         region_name=LAMBDA_REGION,
     )
@@ -408,31 +493,49 @@ def build_collector_runtime_config(
     *,
     event_name: str,
     search_query: str,
-    video_ids: str,
-    channel_ids: str,
-    max_videos: int,
-    max_comments_per_video: int,
-    order: str,
-    region_code: str,
-    relevance_language: str,
-    published_after: str,
-    published_before: str,
-    engine: str,
 ) -> dict[str, Any]:
     return {
         "event_name": event_name,
         "search_query": search_query,
-        "video_ids": video_ids,
-        "channel_ids": channel_ids,
-        "max_videos": int(max_videos),
-        "max_comments_per_video": int(max_comments_per_video),
-        "order": order,
-        "region_code": region_code,
-        "relevance_language": relevance_language,
-        "published_after": published_after,
-        "published_before": published_before,
-        "engine": engine,
     }
+
+
+@st.dialog("Edit collection settings")
+def render_config_dialog(initial_config: dict[str, str]) -> None:
+    with st.form("edit_collection_settings_form", clear_on_submit=False):
+        event_name = st.text_input("Event name", value=initial_config.get("event_name", settings.default_event_name))
+        search_query = st.text_input(
+            "Search queries (comma-separated)",
+            value=initial_config.get("search_query", settings.default_youtube_search_queries),
+        )
+        submitted = st.form_submit_button("Save settings")
+
+    if submitted:
+        if not event_name.strip():
+            st.error("Event name is required.")
+            return
+        if not search_query.strip():
+            st.error("Search query is required.")
+            return
+
+        runtime_config = build_collector_runtime_config(
+            event_name=event_name.strip(),
+            search_query=search_query.strip(),
+        )
+        saved_key, save_error = save_collector_runtime_config(
+            runtime_config,
+            bucket=settings.collector_config_bucket_name,
+            key=settings.collector_config_s3_key,
+            region=settings.aws_region,
+        )
+        if save_error:
+            st.error(f"Could not save collector settings: {save_error}")
+            return
+
+        st.session_state["collector_runtime_config"] = runtime_config
+        load_saved_collector_config.clear()
+        st.session_state["config_save_message"] = f"Saved collector settings to `{saved_key}`."
+        st.rerun()
 
 
 def main() -> None:
@@ -444,13 +547,28 @@ def main() -> None:
         auto_refresh = st.toggle("Auto refresh", value=True)
         refresh_seconds = st.number_input("Refresh every seconds", min_value=3, max_value=60, value=5, step=1)
         st.caption("Disable while typing if the page refreshes too often.")
-        st.markdown("### Deployment")
-        st.write("Use `COLLECTOR_MODE=lambda` for AWS-triggered collection.")
-        st.write("Use the top event filter to narrow live Elasticsearch charts.")
 
-    st.title("YouTube Sentiment Dashboard")
-    st.caption("Collect public YouTube comments, publish them to Kafka, and watch Spark/BERT results update live.")
-    st.markdown(f"<span class='collector-badge'>Collector mode: {COLLECTOR_MODE}</span>", unsafe_allow_html=True)
+    saved_runtime_config, config_error = load_saved_collector_config()
+    if "collector_runtime_config" not in st.session_state:
+        st.session_state["collector_runtime_config"] = saved_runtime_config
+    runtime_config = st.session_state["collector_runtime_config"]
+
+    st.markdown(
+        f"""
+        <div class="hero-card">
+            <div class="collector-badge">Collector mode: {COLLECTOR_MODE}</div>
+            <h1 class="hero-title">Sentiment Monitoring Dashboard</h1>
+            <p class="hero-subtitle">Track processed comments in real time and manage the global collection target from one place.</p>
+            <div class="config-pill"><strong>Event:</strong> {runtime_config.get("event_name", settings.default_event_name)}</div>
+            <div class="config-pill"><strong>Queries:</strong> {runtime_config.get("search_query", settings.default_youtube_search_queries)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if config_error:
+        st.warning(f"Collector config warning: {config_error}")
+    if st.session_state.get("config_save_message"):
+        st.success(st.session_state.pop("config_save_message"))
 
     available_events, event_error = load_available_events()
     if "selected_event_filter" not in st.session_state:
@@ -472,187 +590,61 @@ def main() -> None:
         if event_error:
             st.caption(f"Filter source warning: {event_error}")
 
-    left, right = st.columns([0.95, 1.05])
+    action_left, action_right = st.columns([0.68, 0.32])
+    with action_left:
+        st.markdown("### Collection Controls")
+        st.caption("The saved event and search queries are global and reused by scheduled collectors.")
+    with action_right:
+        button_left, button_right = st.columns(2)
+        with button_left:
+            if st.button("Edit settings", width="stretch"):
+                render_config_dialog(runtime_config)
+        with button_right:
+            collect_label = "Run Lambda now" if COLLECTOR_MODE == "lambda" else "Collect now"
+            collect_now = st.button(collect_label, width="stretch")
 
-    with left:
-        with st.container(border=True):
-            st.markdown("### Collect YouTube Data")
-            if COLLECTOR_MODE == "lambda":
-                st.info(
-                    "Lambda mode saves the chosen event/query settings to S3 so your scheduled EventBridge runs use them. "
-                    "This button also runs Lambda immediately after saving."
+    if collect_now:
+        with st.spinner("Running collection..."):
+            try:
+                saved_key, save_error = save_collector_runtime_config(
+                    runtime_config,
+                    bucket=settings.collector_config_bucket_name,
+                    key=settings.collector_config_s3_key,
+                    region=settings.aws_region,
                 )
-            else:
-                st.info("Local mode runs the collector directly from Streamlit.")
-
-            with st.form("youtube_collector_form", clear_on_submit=False):
-                event_name = st.text_input("Event name", value=settings.default_event_name)
-                search_query_raw = st.text_input(
-                    "Search queries (comma-separated)",
-                    value=settings.default_youtube_search_queries,
-                )
-                video_ids_raw = st.text_input(
-                    "Video IDs (comma-separated, optional)",
-                    value=settings.default_youtube_video_ids,
-                )
-                channel_ids_raw = st.text_input(
-                    "Channel IDs (comma-separated, optional)",
-                    value=settings.default_youtube_channel_ids,
-                )
-                c1, c2 = st.columns(2)
-                with c1:
-                    max_videos = st.number_input("Max videos", min_value=1, max_value=200, value=settings.youtube_max_videos, step=1)
-                with c2:
-                    max_comments = st.number_input(
-                        "Max comments per post",
-                        min_value=1,
-                        max_value=200,
-                        value=settings.youtube_max_comments_per_video,
-                        step=1,
-                    )
-
-                c3, c4 = st.columns(2)
-                with c3:
-                    order = st.selectbox(
-                        "Order",
-                        SORT_OPTIONS,
-                        index=SORT_OPTIONS.index(settings.default_youtube_order)
-                        if settings.default_youtube_order in SORT_OPTIONS
-                        else 0,
-                    )
-                with c4:
-                    region_code = st.text_input(
-                        "Region code (optional)",
-                        value=settings.default_youtube_region_code,
-                    )
-
-                c5, c6 = st.columns(2)
-                with c5:
-                    relevance_language = st.text_input(
-                        "Relevance language (optional)",
-                        value=settings.default_youtube_relevance_language,
-                    )
-                with c6:
-                    engine = st.text_input(
-                        "Engine label",
-                        value="youtube_api",
-                        help="Stored as metadata for traceability.",
-                    )
-
-                published_after = st.text_input(
-                    "Published after (optional, ISO 8601)",
-                    value=settings.youtube_published_after,
-                )
-                published_before = st.text_input(
-                    "Published before (optional, ISO 8601)",
-                    value=settings.youtube_published_before,
-                )
-
-                submit_label = "Save settings & run Lambda now" if COLLECTOR_MODE == "lambda" else "Collect YouTube Comments"
-                submitted = st.form_submit_button(submit_label, use_container_width=True)
-
-            if submitted:
-                if not event_name.strip():
-                    st.error("Event name is required.")
-                elif not search_query_raw.strip() and not video_ids_raw.strip():
-                    st.error("Provide at least one search query or video ID.")
+                if save_error:
+                    st.error(f"Could not save collector settings: {save_error}")
                 else:
-                    runtime_config = build_collector_runtime_config(
-                        event_name=event_name.strip(),
-                        search_query=search_query_raw.strip(),
-                        video_ids=video_ids_raw.strip(),
-                        channel_ids=channel_ids_raw.strip(),
-                        max_videos=int(max_videos),
-                        max_comments_per_video=int(max_comments),
-                        order=order,
-                        region_code=region_code.strip(),
-                        relevance_language=relevance_language.strip(),
-                        published_after=published_after.strip(),
-                        published_before=published_before.strip(),
-                        engine=engine,
-                    )
-                    with st.spinner(
-                        "Collecting YouTube comments..."
-                        if COLLECTOR_MODE != "lambda"
-                        else "Saving settings and triggering Lambda..."
-                    ):
-                        try:
-                            if COLLECTOR_MODE == "lambda":
-                                saved_key, save_error = save_collector_runtime_config(
-                                    runtime_config,
-                                    bucket=settings.collector_config_bucket_name,
-                                    key=settings.collector_config_s3_key,
-                                    region=settings.aws_region,
-                                )
-                                if save_error:
-                                    st.error(f"Could not save Lambda collector settings: {save_error}")
-                                else:
-                                    result = invoke_lambda_collection(
-                                        event_name=runtime_config["event_name"],
-                                        search_query=runtime_config["search_query"],
-                                        video_ids=runtime_config["video_ids"],
-                                        channel_ids=runtime_config["channel_ids"],
-                                        max_videos=runtime_config["max_videos"],
-                                        max_comments_per_video=runtime_config["max_comments_per_video"],
-                                        order=runtime_config["order"],
-                                        region_code=runtime_config["region_code"],
-                                        relevance_language=runtime_config["relevance_language"],
-                                        published_after=runtime_config["published_after"],
-                                        published_before=runtime_config["published_before"],
-                                        engine=runtime_config["engine"],
-                                    )
-                                    body = _extract_lambda_body(result)
-                                    if body.get("status") == "ok":
-                                        st.success(f"Saved collector settings to `{saved_key}`.")
-                                        render_success(result)
-                                    else:
-                                        message = body.get("message") or "Lambda returned an error."
-                                        st.error(str(message))
-                                        error_items = body.get("errors") or body.get("warnings") or []
-                                        if error_items:
-                                            with st.expander("Details"):
-                                                if isinstance(error_items, list):
-                                                    for error in error_items:
-                                                        st.write(f"- {error}")
-                                                else:
-                                                    st.json(error_items)
-                            else:
-                                result = invoke_local_collection(
-                                    event_name=runtime_config["event_name"],
-                                    search_query=runtime_config["search_query"],
-                                    video_ids=runtime_config["video_ids"],
-                                    channel_ids=runtime_config["channel_ids"],
-                                    max_videos=runtime_config["max_videos"],
-                                    max_comments_per_video=runtime_config["max_comments_per_video"],
-                                    order=runtime_config["order"],
-                                    region_code=runtime_config["region_code"],
-                                    relevance_language=runtime_config["relevance_language"],
-                                    published_after=runtime_config["published_after"],
-                                    published_before=runtime_config["published_before"],
-                                    engine=runtime_config["engine"],
-                                )
-                                render_success(result)
-                        except LambdaInvokeError as exc:
-                            render_error(exc)
-                        except Exception as exc:
-                            st.error(f"Unexpected error while collecting YouTube data: {exc}")
+                    if COLLECTOR_MODE == "lambda":
+                        result = invoke_lambda_collection(
+                            event_name=runtime_config["event_name"],
+                            search_query=runtime_config["search_query"],
+                        )
+                    else:
+                        result = invoke_local_collection(
+                            event_name=runtime_config["event_name"],
+                            search_query=runtime_config["search_query"],
+                        )
+                    st.success(f"Using collector settings from `{saved_key}`.")
+                    render_success(result)
+            except LambdaInvokeError as exc:
+                render_error(exc)
+            except Exception as exc:
+                st.error(f"Unexpected error while running collection: {exc}")
 
-            render_last_response()
+    render_last_response()
 
-    with right:
-        with st.container(border=True):
+    top_left, top_right = st.columns([1.08, 0.92])
+    with top_left:
+        with st.container(border=False):
+            st.markdown("<div class='section-card'>", unsafe_allow_html=True)
             render_live_sentiment_panel()
-
-    with st.expander("Workflow and AWS target"):
-        info_left, info_right = st.columns(2)
-        with info_left:
-            render_target_summary()
-        with info_right:
-            render_flow_summary()
-            st.markdown("### Notes")
-            st.write("- Streamlit on EC2 should use an instance profile or configured AWS CLI credentials.")
-            st.write("- The collector uses the YouTube Data API and requires an API key with quota available.")
-            st.write("- Spark reads Kafka, applies the BERT model, and writes processed results to Elasticsearch.")
+            st.markdown("</div>", unsafe_allow_html=True)
+    with top_right:
+        with st.container(border=False):
+            st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+            render_recent_comments_panel()
+            st.markdown("</div>", unsafe_allow_html=True)
 
     if auto_refresh:
         time.sleep(int(refresh_seconds))

@@ -19,6 +19,12 @@ from uuid import uuid4
 import requests
 
 from cloud.kafka_client import KafkaJsonPublisher
+from cloud.collector_state import (
+    extract_seen_comment_ids,
+    load_collector_state,
+    merge_seen_comment_ids,
+    save_collector_state,
+)
 from cloud.s3_backup import upload_records_to_s3
 from config.settings import settings
 
@@ -410,6 +416,7 @@ class YouTubeAPICollector:
         max_comments_per_video: int,
         session_id: str,
         order: str,
+        exclude_comment_ids: set[str] | None = None,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         errors: list[str] = []
         documents: list[dict[str, Any]] = []
@@ -418,7 +425,7 @@ class YouTubeAPICollector:
             return documents, ["Missing video_id in video record."]
 
         page_token: str | None = None
-        seen_comment_ids: set[str] = set()
+        seen_comment_ids: set[str] = {str(item).strip() for item in (exclude_comment_ids or set()) if str(item).strip()}
         collected_count = 0
         search_url = video.get("search_url") or f"{YOUTUBE_API_BASE_URL}/search"
 
@@ -574,6 +581,7 @@ class YouTubeAPICollector:
         relevance_language: str | None = None,
         published_after: str | None = None,
         published_before: str | None = None,
+        exclude_comment_ids: set[str] | list[str] | tuple[str, ...] | None = None,
         session_id: str | None = None,
     ) -> dict[str, Any]:
         """Collect and normalize public YouTube comments."""
@@ -601,7 +609,7 @@ class YouTubeAPICollector:
         video_errors: list[str] = []
         comment_errors: list[str] = []
         seen_videos: set[str] = set()
-        seen_comments: set[str] = set()
+        seen_comments: set[str] = {str(item).strip() for item in (exclude_comment_ids or set()) if str(item).strip()}
         videos_scanned = 0
         engine_warning = None
 
@@ -648,9 +656,7 @@ class YouTubeAPICollector:
 
         for video in videos[:max_videos]:
             video_id = str(video.get("video_id") or "")
-            if not video_id or video_id in seen_videos:
-                seen_videos.add(video_id)
-            else:
+            if video_id:
                 seen_videos.add(video_id)
             remaining_comments = max_comments_per_video
             documents, errors = self._collect_comments_for_video(
@@ -660,6 +666,7 @@ class YouTubeAPICollector:
                 max_comments_per_video=remaining_comments,
                 session_id=session_id,
                 order=order,
+                exclude_comment_ids=seen_comments,
             )
             if errors:
                 comment_errors.extend(errors)
@@ -729,6 +736,12 @@ def run_youtube_collection(
     """Collect YouTube comments, optionally publish them to Kafka, and optionally back them up to S3."""
 
     collector = YouTubeAPICollector(engine=engine, region_code=region_code, relevance_language=relevance_language, published_after=published_after, published_before=published_before)
+    collector_state, collector_state_error = load_collector_state(
+        bucket=settings.collector_state_bucket_name,
+        key=settings.collector_state_s3_key,
+        region=settings.aws_region,
+    )
+    exclude_comment_ids = extract_seen_comment_ids(collector_state, event_name)
     collection = collector.collect(
         event_name=event_name,
         search_query=search_query,
@@ -741,6 +754,7 @@ def run_youtube_collection(
         relevance_language=relevance_language,
         published_after=published_after,
         published_before=published_before,
+        exclude_comment_ids=exclude_comment_ids,
         session_id=session_id,
     )
 
@@ -783,7 +797,28 @@ def run_youtube_collection(
             s3_backup_key = None
             backup_error = str(exc)
 
+    collector_state_key = None
+    collector_state_save_error = None
+    if collection.get("documents") and publish_to_kafka and kafka_error is None:
+        new_comment_ids = [str(document.get("comment_id") or "").strip() for document in collection.get("documents", [])]
+        collector_state = merge_seen_comment_ids(
+            collector_state,
+            event_name=event_name,
+            new_comment_ids=new_comment_ids,
+            max_ids_per_event=settings.collector_state_max_comment_ids,
+        )
+        collector_state_key, collector_state_save_error = save_collector_state(
+            collector_state,
+            bucket=settings.collector_state_bucket_name,
+            key=settings.collector_state_s3_key,
+            region=settings.aws_region,
+        )
+
     errors = list(collection.get("warnings", []))
+    if collector_state_error:
+        errors.append(f"Collector state load issue: {collector_state_error}")
+    if collector_state_save_error:
+        errors.append(f"Collector state save issue: {collector_state_save_error}")
     if kafka_error:
         errors.append(f"Kafka publish failed: {kafka_error}")
     if backup_error and "missing" not in backup_error.lower():
@@ -803,6 +838,7 @@ def run_youtube_collection(
         "kafka_topic": kafka_topic,
         "kafka_bootstrap_servers": kafka_bootstrap_servers,
         "s3_backup_key": s3_backup_key,
+        "collector_state_key": collector_state_key,
         "backup_error": backup_error,
         "errors": errors,
     }
